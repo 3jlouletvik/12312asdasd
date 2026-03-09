@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Twitch Multi-Chat Panel</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0e0e10;
+    --bg2: #18181b;
+    --bg3: #1f1f23;
+    --bg4: #26262c;
+    --purple: #9147ff;
+    --purple2: #772ce8;
+    --purple-glow: rgba(145,71,255,0.3);
+    --green: #00f5a0;
+    --green2: #00d98b;
+    --red: #ff4b4b;
+    --yellow: #ffcc00;
+    --text: #efeff1;
+    --text2: #adadb8;
+    --text3: #6f6f7a;
+    --border: rgba(255,255,255,0.07);
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Syne', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; overflow-x: hidden; }
+
+  .header {
+    background: var(--bg2); border-bottom: 1px solid var(--border);
+    padding: 0 20px; height: 58px; display: flex; align-items: center; gap: 16px;
+    position: sticky; top: 0; z-index: 100;
+  }
+  .header-logo { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 800; letter-spacing: -0.5px; color: var(--purple); }
+  .header-logo svg { width: 24px; height: 24px; fill: var(--purple); }
+  .header-divider { width: 1px; height: 28px; background: var(--border); }
+  .channel-input-wrap { display: flex; align-items: center; gap: 8px; flex: 1; max-width: 420px; }
+  .channel-input-wrap label { font-size: 12px; color: var(--text3); white-space: nowrap; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .channel-input { flex: 1; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none; transition: border-color .2s; }
+  .channel-input:focus { border-color: var(--purple); }
+  .channel-input::placeholder { color: var(--text3); }
+  .btn { border: none; border-radius: 6px; padding: 7px 14px; font-family: 'Syne', sans-serif; font-weight: 700; font-size: 13px; cursor: pointer; transition: all .18s; white-space: nowrap; }
+  .btn-purple { background: var(--purple); color: #fff; }
+  .btn-purple:hover { background: var(--purple2); transform: translateY(-1px); box-shadow: 0 4px 16px var(--purple-glow); }
+  .btn-outline { background: transparent; color: var(--text2); border: 1px solid var(--border); }
+  .btn-outline:hover { border-color: var(--purple); color: var(--purple); }
+  .btn-green { background: var(--green); color: #000; }
+  .btn-green:hover { background: var(--green2); }
+  .btn-red { background: transparent; color: var(--red); border: 1px solid rgba(255,75,75,.3); }
+  .btn-red:hover { background: rgba(255,75,75,.15); border-color: var(--red); }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+  .btn-xs { padding: 3px 7px; font-size: 11px; border-radius: 4px; }
+  .btn:disabled { opacity: .4; cursor: not-allowed; transform: none !important; }
+  .header-actions { margin-left: auto; display: flex; gap: 8px; }
+  .status-badge { display: flex; align-items: center; gap: 6px; background: var(--bg3); border: 1px solid var(--border); border-radius: 20px; padding: 4px 12px; font-size: 12px; font-weight: 600; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text3); }
+  .dot.online { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .dot.partial { background: var(--yellow); }
+
+  .layout { display: grid; grid-template-columns: 280px 1fr; height: calc(100vh - 58px); }
+
+  .sidebar { background: var(--bg2); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
+  .sidebar-header { padding: 14px 16px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .sidebar-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text3); }
+  .accounts-list { flex: 1; overflow-y: auto; padding: 8px; }
+  .accounts-list::-webkit-scrollbar { width: 4px; }
+  .accounts-list::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 4px; }
+
+  .account-card { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 6px; transition: all .18s; }
+  .account-card:hover { border-color: rgba(145,71,255,.4); background: var(--bg4); }
+  .account-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .account-avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800; flex-shrink: 0; border: 2px solid transparent; }
+  .account-avatar.online { border-color: var(--green); }
+  .account-avatar.offline { border-color: var(--text3); }
+  .account-info { flex: 1; min-width: 0; }
+  .account-name { font-size: 13px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .account-status { font-size: 11px; color: var(--text3); display: flex; align-items: center; gap: 4px; }
+  .account-status .dot { width: 5px; height: 5px; }
+  .account-controls { display: flex; gap: 5px; flex-wrap: wrap; }
+
+  .add-account-form { padding: 12px; border-top: 1px solid var(--border); background: var(--bg2); }
+  .add-account-form .form-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text3); margin-bottom: 8px; }
+  .form-field { margin-bottom: 7px; }
+  .form-field label { font-size: 11px; color: var(--text3); display: block; margin-bottom: 3px; }
+  .form-input { width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 12px; outline: none; transition: border-color .2s; }
+  .form-input:focus { border-color: var(--purple); }
+  .form-input::placeholder { color: var(--text3); }
+  .form-hint { font-size: 10px; color: var(--text3); margin-top: 3px; }
+  .form-hint a { color: var(--purple); }
+
+  .main { display: flex; flex-direction: column; overflow: hidden; }
+  .tabs-bar { display: flex; gap: 0; border-bottom: 1px solid var(--border); background: var(--bg2); padding: 0 16px; overflow-x: auto; }
+  .tab-btn { padding: 10px 16px; font-size: 13px; font-weight: 600; color: var(--text3); background: none; border: none; border-bottom: 2px solid transparent; cursor: pointer; transition: all .18s; white-space: nowrap; font-family: 'Syne', sans-serif; }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--purple); border-bottom-color: var(--purple); }
+  .tab-content { display: none; flex: 1; overflow: hidden; }
+  .tab-content.active { display: flex; flex-direction: column; }
+
+  .chat-area { flex: 1; overflow-y: auto; padding: 12px 16px; }
+  .chat-area::-webkit-scrollbar { width: 5px; }
+  .chat-area::-webkit-scrollbar-thumb { background: var(--bg4); border-radius: 4px; }
+  .chat-msg { display: flex; gap: 10px; padding: 5px 8px; border-radius: 6px; margin-bottom: 2px; transition: background .15s; align-items: flex-start; }
+  .chat-msg:hover { background: var(--bg3); }
+  .chat-msg.own { background: rgba(145,71,255,.06); }
+  .chat-msg-time { font-size: 10px; color: var(--text3); font-family: 'JetBrains Mono', monospace; padding-top: 2px; flex-shrink: 0; }
+  .chat-msg-author { font-size: 13px; font-weight: 700; flex-shrink: 0; }
+  .chat-msg-text { font-size: 13px; color: var(--text); word-break: break-word; line-height: 1.5; }
+  .system-msg { text-align: center; font-size: 11px; color: var(--text3); padding: 6px; font-style: italic; }
+
+  .chat-input-area { padding: 12px 16px; border-top: 1px solid var(--border); background: var(--bg2); }
+  .account-selector-row { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; align-items: center; }
+  .account-selector-label { font-size: 11px; color: var(--text3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .account-chip { display: flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 20px; font-size: 12px; font-weight: 600; border: 1px solid var(--border); background: var(--bg3); cursor: pointer; transition: all .18s; color: var(--text2); }
+  .account-chip .chip-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .account-chip:hover { border-color: rgba(145,71,255,.5); color: var(--text); }
+  .account-chip.selected { border-color: var(--purple); background: rgba(145,71,255,.15); color: var(--text); }
+  .account-chip.all-chip { border-color: rgba(0,245,160,.3); }
+  .account-chip.all-chip.selected { border-color: var(--green); background: rgba(0,245,160,.1); color: var(--green); }
+  .msg-input-row { display: flex; gap: 8px; align-items: flex-end; }
+  .msg-input { flex: 1; background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; color: var(--text); font-family: 'Syne', sans-serif; font-size: 13px; outline: none; transition: border-color .2s; resize: none; min-height: 42px; max-height: 100px; line-height: 1.5; }
+  .msg-input:focus { border-color: var(--purple); }
+  .msg-input::placeholder { color: var(--text3); }
+  .send-btn { width: 42px; height: 42px; border-radius: 8px; background: var(--purple); border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .18s; flex-shrink: 0; }
+  .send-btn:hover { background: var(--purple2); transform: translateY(-1px); box-shadow: 0 4px 16px var(--purple-glow); }
+  .send-btn svg { fill: white; width: 18px; height: 18px; }
+  .send-btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
+  .char-count { font-size: 11px; color: var(--text3); text-align: right; margin-top: 4px; }
+  .char-count.warn { color: var(--yellow); }
+  .char-count.over { color: var(--red); }
+
+  .broadcast-panel { padding: 20px; flex: 1; overflow-y: auto; }
+  .broadcast-header { margin-bottom: 20px; }
+  .broadcast-header h2 { font-size: 20px; font-weight: 800; margin-bottom: 4px; }
+  .broadcast-header p { font-size: 13px; color: var(--text3); }
+  .broadcast-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+  .broadcast-card { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; }
+  .broadcast-card-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px; color: var(--text3); margin-bottom: 12px; }
+  .bc-account-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .bc-account-row:last-child { border-bottom: none; }
+  .bc-checkbox { width: 16px; height: 16px; border-radius: 4px; border: 2px solid var(--border); background: var(--bg4); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .15s; flex-shrink: 0; }
+  .bc-checkbox.checked { background: var(--purple); border-color: var(--purple); }
+  .bc-checkbox.checked::after { content: '✓'; font-size: 10px; color: white; font-weight: 800; }
+  .bc-name { flex: 1; font-size: 13px; font-weight: 600; }
+  .broadcast-msg-area { margin-bottom: 12px; }
+  .broadcast-msg-area label { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.7px; color: var(--text3); display: block; margin-bottom: 6px; }
+  .broadcast-textarea { width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; color: var(--text); font-family: 'Syne', sans-serif; font-size: 13px; outline: none; resize: vertical; min-height: 80px; line-height: 1.5; }
+  .broadcast-textarea:focus { border-color: var(--purple); }
+  .delay-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .delay-row label { font-size: 12px; color: var(--text3); font-weight: 600; }
+  .delay-input { width: 70px; background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; color: var(--text); font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none; text-align: center; }
+  .delay-input:focus { border-color: var(--purple); }
+  .progress-bar-wrap { background: var(--bg4); border-radius: 20px; height: 6px; overflow: hidden; margin-top: 6px; }
+  .progress-bar { height: 100%; background: linear-gradient(90deg, var(--purple), var(--green)); border-radius: 20px; transition: width .3s; width: 0; }
+
+  .queue-panel { padding: 20px; flex: 1; overflow-y: auto; }
+  .queue-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .queue-header h2 { font-size: 20px; font-weight: 800; }
+  .queue-input-row { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 16px; }
+  .queue-input-wrap { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+  .queue-select { background: var(--bg3); border: 1px solid var(--border); border-radius: 6px; padding: 7px 10px; color: var(--text); font-family: 'Syne', sans-serif; font-size: 13px; outline: none; cursor: pointer; }
+  .queue-select:focus { border-color: var(--purple); }
+  .queue-textarea { width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; color: var(--text); font-family: 'Syne', sans-serif; font-size: 13px; outline: none; resize: none; min-height: 70px; line-height: 1.5; }
+  .queue-textarea:focus { border-color: var(--purple); }
+  .queue-list { display: flex; flex-direction: column; gap: 6px; }
+  .queue-item { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; display: flex; align-items: flex-start; gap: 10px; }
+  .queue-item.sent { opacity: .4; }
+  .queue-item-num { font-size: 12px; font-weight: 700; color: var(--text3); font-family: 'JetBrains Mono', monospace; padding-top: 2px; }
+  .queue-item.sent .queue-item-num { color: var(--green); }
+  .queue-item-body { flex: 1; }
+  .queue-item-account { font-size: 12px; font-weight: 700; margin-bottom: 3px; }
+  .queue-item-text { font-size: 13px; color: var(--text); }
+  .queue-item-delay { font-size: 11px; color: var(--text3); margin-top: 3px; }
+  .queue-controls { display: flex; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+
+  .toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; }
+  .toast { background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 13px; display: flex; align-items: center; gap: 8px; animation: slideIn .2s ease; max-width: 300px; box-shadow: 0 8px 32px rgba(0,0,0,.4); }
+  .toast.success { border-color: rgba(0,245,160,.4); }
+  .toast.error { border-color: rgba(255,75,75,.4); }
+  .toast.info { border-color: rgba(145,71,255,.4); }
+  @keyframes slideIn { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+  @keyframes fadeOut { to { opacity: 0; transform: translateX(20px); } }
+
+  .empty-state { text-align: center; padding: 30px 20px; color: var(--text3); }
+  .empty-state p { font-size: 14px; }
+  .token-help { background: rgba(145,71,255,.08); border: 1px solid rgba(145,71,255,.25); border-radius: 8px; padding: 10px 12px; margin-top: 8px; font-size: 11px; color: var(--text2); line-height: 1.6; }
+  .token-help a { color: var(--purple); }
+  .token-help strong { color: var(--text); }
+  .connection-log { padding: 12px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text3); line-height: 1.8; }
+  .log-line.ok { color: var(--green); }
+  .log-line.err { color: var(--red); }
+  .log-line.info { color: var(--purple); }
+  * { scrollbar-width: thin; scrollbar-color: var(--bg4) transparent; }
+  @media (max-width: 700px) { .layout { grid-template-columns: 1fr; } .sidebar { display: none; } .broadcast-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-logo">
+    <svg viewBox="0 0 24 24"><path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714z"/></svg>
+    TwitchMultiChat
+  </div>
+  <div class="header-divider"></div>
+  <div class="channel-input-wrap">
+    <label>КАНАЛ:</label>
+    <input class="channel-input" id="channelInput" type="text" placeholder="twitch.tv/channel или channel">
+    <button class="btn btn-purple" onclick="connectAllToChannel()">Подключить всех</button>
+  </div>
+  <div class="header-actions">
+    <div class="status-badge">
+      <div class="dot" id="globalDot"></div>
+      <span id="globalStatusText">Не подключено</span>
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+  <div class="sidebar">
+    <div class="sidebar-header">
+      <span class="sidebar-title">Аккаунты</span>
+      <span id="accountCount" style="font-size:11px;color:var(--text3)">0 / 0</span>
+    </div>
+    <div class="accounts-list" id="accountsList">
+      <div class="empty-state"><p>Нет аккаунтов</p></div>
+    </div>
+    <div class="add-account-form">
+      <div class="form-title">➕ Добавить аккаунт</div>
+      <div class="form-field">
+        <label>Username</label>
+        <input class="form-input" id="newUsername" placeholder="nickname123" autocomplete="off">
+      </div>
+      <div class="form-field">
+        <label>OAuth Token</label>
+        <input class="form-input" id="newToken" type="password" placeholder="oauth:xxxxxxxxxxxxxxxx">
+        <div class="form-hint">Получи: <a href="https://twitchapps.com/tmi/" target="_blank">twitchapps.com/tmi</a></div>
+      </div>
+      <div class="form-field">
+        <label>Цвет</label>
+        <input type="color" id="newColor" value="#9147ff" style="width:100%;height:30px;border-radius:6px;border:1px solid var(--border);background:var(--bg3);cursor:pointer">
+      </div>
+      <button class="btn btn-purple" style="width:100%;margin-top:4px" onclick="addAccount()">Добавить</button>
+      <div class="token-help">
+        <strong>Как получить токен:</strong><br>
+        1. Открой <a href="https://twitchapps.com/tmi/" target="_blank">twitchapps.com/tmi</a><br>
+        2. Войди через нужный аккаунт Twitch<br>
+        3. Скопируй токен <strong>oauth:xxx...</strong>
+      </div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="tabs-bar">
+      <button class="tab-btn active" onclick="switchTab('chat',this)">💬 Общий чат</button>
+      <button class="tab-btn" onclick="switchTab('perAccount',this)">👤 По аккаунтам</button>
+      <button class="tab-btn" onclick="switchTab('broadcast',this)">📡 Broadcast</button>
+      <button class="tab-btn" onclick="switchTab('queue',this)">📋 Очередь</button>
+      <button class="tab-btn" onclick="switchTab('log',this)">🔌 Лог</button>
+    </div>
+
+    <!-- CHAT TAB -->
+    <div class="tab-content active" id="tab-chat">
+      <div class="chat-area" id="chatArea">
+        <div class="system-msg">Добавь аккаунты в сайдбаре, укажи канал и нажми «Подключить всех»</div>
+      </div>
+      <div class="chat-input-area">
+        <div class="account-selector-row">
+          <span class="account-selector-label">От:</span>
+          <div id="chatAccountChips" style="display:flex;gap:5px;flex-wrap:wrap"></div>
+        </div>
+        <div class="msg-input-row">
+          <textarea class="msg-input" id="chatMsgInput" placeholder="Написать сообщение... (Enter = отправить)" rows="1"
+            onkeydown="handleChatKey(event)" oninput="updateCharCount()"></textarea>
+          <button class="send-btn" onclick="sendChatMessage()">
+            <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+          </button>
+        </div>
+        <div class="char-count" id="charCount">0 / 500</div>
+      </div>
+    </div>
+
+    <!-- PER ACCOUNT TAB -->
+    <div class="tab-content" id="tab-perAccount">
+      <div style="flex:1;overflow-y:auto;padding:16px" id="perAccountArea">
+        <div class="empty-state"><p>Добавь аккаунты для управления каждым отдельно</p></div>
+      </div>
+    </div>
+
+    <!-- BROADCAST TAB -->
+    <div class="tab-content" id="tab-broadcast">
+      <div class="broadcast-panel">
+        <div class="broadcast-header">
+          <h2>📡 Broadcast</h2>
+          <p>Отправь одно сообщение от нескольких аккаунтов</p>
+        </div>
+        <div class="broadcast-grid">
+          <div class="broadcast-card">
+            <div class="broadcast-card-title">Аккаунты</div>
+            <div id="broadcastAccountList"><div style="font-size:12px;color:var(--text3)">Нет аккаунтов</div></div>
+          </div>
+          <div class="broadcast-card">
+            <div class="broadcast-card-title">Настройки</div>
+            <div class="delay-row">
+              <label>Задержка:</label>
+              <input type="number" class="delay-input" id="broadcastDelay" value="1500" min="0" step="100">
+              <span style="font-size:12px;color:var(--text3)">мс</span>
+            </div>
+            <div style="font-size:11px;color:var(--text3);line-height:1.7">Рекомендуется ≥ 1500мс чтобы не попасть под rate-limit Twitch.</div>
+          </div>
+        </div>
+        <div class="broadcast-msg-area">
+          <label>Сообщение</label>
+          <textarea class="broadcast-textarea" id="broadcastMsg" placeholder="Введи текст для broadcast..."></textarea>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-green" onclick="startBroadcast()">🚀 Отправить</button>
+          <button class="btn btn-outline" onclick="selectAllBroadcast()">Выбрать всех</button>
+          <button class="btn btn-outline" onclick="deselectAllBroadcast()">Снять все</button>
+        </div>
+        <div id="broadcastProgress" style="display:none;margin-top:12px">
+          <div style="font-size:12px;color:var(--text3)" id="progressLabel">Отправка...</div>
+          <div class="progress-bar-wrap"><div class="progress-bar" id="progressBar"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- QUEUE TAB -->
+    <div class="tab-content" id="tab-queue">
+      <div class="queue-panel">
+        <div class="queue-header">
+          <h2>📋 Очередь сообщений</h2>
+        </div>
+        <div class="queue-input-row">
+          <div class="queue-input-wrap">
+            <select class="queue-select" id="queueAccount"><option value="">Выбрать аккаунт...</option></select>
+            <textarea class="queue-textarea" id="queueMsg" placeholder="Текст сообщения..."></textarea>
+            <div class="delay-row" style="margin-bottom:0">
+              <label>Задержка:</label>
+              <input type="number" class="delay-input" id="queueDelay" value="2000" min="0" step="500">
+              <span style="font-size:12px;color:var(--text3)">мс после предыдущего</span>
+            </div>
+          </div>
+          <button class="btn btn-purple" style="align-self:flex-end" onclick="addToQueue()">+ Добавить</button>
+        </div>
+        <div class="queue-list" id="queueList">
+          <div class="empty-state"><p>Очередь пуста. Добавь задачи выше.</p></div>
+        </div>
+        <div class="queue-controls">
+          <button class="btn btn-green" id="queueStartBtn" onclick="runQueue()">▶ Запустить</button>
+          <button class="btn btn-red" onclick="clearQueue()">🗑 Очистить</button>
+          <span style="font-size:12px;color:var(--text3);align-self:center" id="queueStatus"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- LOG TAB -->
+    <div class="tab-content" id="tab-log">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid var(--border)">
+        <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--text3)">Лог подключений</span>
+        <button class="btn btn-outline btn-sm" onclick="clearLog()">Очистить</button>
+      </div>
+      <div class="connection-log" id="connectionLog" style="flex:1;overflow-y:auto">
+        <div class="log-line info">[SYSTEM] TwitchMultiChat готов. Добавь аккаунты и укажи канал.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<script>
+const state = {
+  accounts: [],
+  channel: '',
+  messages: [],
+  selectedSendAccounts: new Set(),
+  broadcastSelected: new Set(),
+  queue: [],
+  queueRunning: false,
+  activeTab: 'chat'
+};
+
+function uid() { return Math.random().toString(36).slice(2,9); }
+function nowTime() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+}
+function parseChannel(v) {
+  v = v.trim().toLowerCase().replace('https://www.twitch.tv/','').replace('https://twitch.tv/','').replace('twitch.tv/','');
+  return v.replace(/^#/,'').split('/')[0].split('?')[0];
+}
+function getAccount(id) { return state.accounts.find(a => a.id === id); }
+function getInitials(n) { return n.slice(0,2).toUpperCase(); }
+function escapeHtml(t) { return t.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function toast(msg, type='info', dur=3000) {
+  const icons = {success:'✅',error:'❌',info:'ℹ️'};
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span>${icons[type]||'ℹ️'}</span><span>${msg}</span>`;
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => { el.style.animation='fadeOut .3s ease forwards'; setTimeout(()=>el.remove(),300); }, dur);
+}
+
+function addLog(text, type='info') {
+  const el = document.getElementById('connectionLog');
+  const line = document.createElement('div');
+  line.className = `log-line ${type}`;
+  line.textContent = `[${nowTime()}] ${text}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+function clearLog() { document.getElementById('connectionLog').innerHTML = ''; }
+
+// ACCOUNTS
+function addAccount() {
+  const username = document.getElementById('newUsername').value.trim().toLowerCase();
+  const token = document.getElementById('newToken').value.trim();
+  const color = document.getElementById('newColor').value;
+  if (!username) { toast('Введи username','error'); return; }
+  if (!token || !token.startsWith('oauth:')) { toast('Токен должен начинаться с oauth:','error'); return; }
+  if (state.accounts.find(a => a.username === username)) { toast('Аккаунт уже добавлен','error'); return; }
+  const acc = { id: uid(), username, token, color, ws: null, connected: false, channel: '', msgCount: 0 };
+  state.accounts.push(acc);
+  document.getElementById('newUsername').value = '';
+  document.getElementById('newToken').value = '';
+  renderAll();
+  toast(`@${username} добавлен`, 'success');
+  addLog(`Аккаунт @${username} добавлен`, 'info');
+}
+
+function removeAccount(id) {
+  const acc = getAccount(id);
+  if (!acc) return;
+  disconnectAccount(acc);
+  state.accounts = state.accounts.filter(a => a.id !== id);
+  state.selectedSendAccounts.delete(id);
+  state.broadcastSelected.delete(id);
+  renderAll();
+  toast(`@${acc.username} удалён`, 'info');
+}
+
+// WEBSOCKET / IRC
+function connectAccount(acc, channel) {
+  // Полная остановка предыдущего соединения
+  if (acc._pingInterval) { clearInterval(acc._pingInterval); acc._pingInterval = null; }
+  if (acc._reconnectTimer) { clearTimeout(acc._reconnectTimer); acc._reconnectTimer = null; }
+  acc._manualDisconnect = false;
+  if (acc.ws) {
+    try { acc.ws.onclose = null; acc.ws.onerror = null; acc.ws.close(); } catch(e){}
+    acc.ws = null;
+  }
+  acc.connected = false;
+
+  channel = channel || state.channel;
+  if (!channel) { toast('Укажи канал','error'); return; }
+  acc.channel = channel;
+  addLog(`Подключение @${acc.username} → #${channel}...`, 'info');
+
+  doConnect(acc);
+}
+
+function doConnect(acc) {
+  if (acc._manualDisconnect) return;
+  const ws = new WebSocket('wss://irc-ws.chat.twitch.tv:443');
+  acc.ws = ws;
+
+  ws.onopen = () => {
+    addLog(`@${acc.username} WS открыт`, 'ok');
+    ws.send('CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership');
+    ws.send(`PASS ${acc.token}`);
+    ws.send(`NICK ${acc.username}`);
+    ws.send(`JOIN #${acc.channel}`);
+
+    // Keepalive — отправляем PING каждые 4 минуты чтобы WS не закрылся
+    if (acc._pingInterval) clearInterval(acc._pingInterval);
+    acc._pingInterval = setInterval(() => {
+      if (acc.ws && acc.ws.readyState === WebSocket.OPEN) {
+        acc.ws.send('PING :tmi.twitch.tv');
+      }
+    }, 4 * 60 * 1000);
+  };
+
+  ws.onmessage = (e) => {
+    const lines = e.data.trim().split('\r\n');
+    lines.forEach(line => {
+      if (line.startsWith('PING')) { ws.send('PONG :tmi.twitch.tv'); return; }
+      if (line.startsWith('PONG')) return;
+      parseIRCLine(acc, line);
+    });
+  };
+
+  ws.onerror = (e) => {
+    addLog(`@${acc.username} WS ошибка`, 'err');
+  };
+
+  ws.onclose = (e) => {
+    if (acc._pingInterval) { clearInterval(acc._pingInterval); acc._pingInterval = null; }
+    acc.connected = false;
+    acc.ws = null;
+    renderSidebar(); updateStatus();
+
+    if (acc._manualDisconnect) {
+      addLog(`@${acc.username} отключён`, 'info');
+      return;
+    }
+    // Авто-переподключение через 3 секунды
+    addLog(`@${acc.username} соединение потеряно (${e.code}) — переподключение через 3с...`, 'err');
+    acc._reconnectTimer = setTimeout(() => {
+      if (!acc._manualDisconnect) {
+        addLog(`@${acc.username} переподключение...`, 'info');
+        doConnect(acc);
+      }
+    }, 3000);
+  };
+}
+
+function disconnectAccount(acc) {
+  acc._manualDisconnect = true;
+  if (acc._pingInterval) { clearInterval(acc._pingInterval); acc._pingInterval = null; }
+  if (acc._reconnectTimer) { clearTimeout(acc._reconnectTimer); acc._reconnectTimer = null; }
+  if (acc.ws) {
+    try { acc.ws.send(`PART #${acc.channel}`); } catch(e){}
+    try { acc.ws.onclose = null; acc.ws.close(); } catch(e){}
+    acc.ws = null;
+  }
+  acc.connected = false;
+  addLog(`@${acc.username} отключён`, 'info');
+  renderSidebar(); updateStatus();
+}
+
+function parseIRCLine(acc, line) {
+  if (line.includes('001') && line.toLowerCase().includes(acc.username)) {
+    addLog(`@${acc.username} авторизован`, 'ok');
+  }
+  // JOIN — канал может быть офлайн, IRC всё равно работает
+  if (line.includes('JOIN') && line.toLowerCase().includes(acc.username.toLowerCase())) {
+    if (!acc.connected) {
+      acc.connected = true;
+      addLog(`@${acc.username} вошёл в #${acc.channel}`, 'ok');
+      renderSidebar(); updateStatus(); renderPerAccountTab();
+      addSystemMsg(`@${acc.username} подключился`);
+    }
+  }
+  // 366 = End of NAMES — запасной сигнал что мы в канале
+  if (line.includes(' 366 ') && !acc.connected) {
+    acc.connected = true;
+    addLog(`@${acc.username} в канале #${acc.channel} (подтверждено)`, 'ok');
+    renderSidebar(); updateStatus(); renderPerAccountTab();
+    addSystemMsg(`@${acc.username} подключился`);
+  }
+  // PRIVMSG — только ЧУЖИЕ сообщения (свои добавляем локально в sendMessage)
+  if (line.includes('PRIVMSG')) {
+    const msg = parsePrivMsg(line);
+    if (msg && msg.username.toLowerCase() !== acc.username.toLowerCase()) {
+      addChatMessage({ ...msg, ownAccountId: null });
+    }
+  }
+  if (line.includes('NOTICE') && (line.includes('Login authentication failed') || line.includes('Improperly formatted'))) {
+    acc.connected = false;
+    addLog(`@${acc.username} ОШИБКА АВТОРИЗАЦИИ — проверь токен`, 'err');
+    toast(`@${acc.username}: ошибка авторизации. Проверь токен.`, 'error', 6000);
+    renderSidebar(); updateStatus();
+  }
+}
+
+function parsePrivMsg(line) {
+  try {
+    let tags = {}, rest = line;
+    if (line.startsWith('@')) {
+      const ti = line.indexOf(' ');
+      line.slice(1, ti).split(';').forEach(t => { const [k,v]=t.split('='); tags[k]=v; });
+      rest = line.slice(ti+1);
+    }
+    const m = rest.match(/^:(\S+)!\S+ PRIVMSG (#\S+) :(.+)/);
+    if (!m) return null;
+    return { username: m[1], channel: m[2], text: m[3], color: tags.color||'#9147ff', displayName: tags['display-name']||m[1], time: nowTime() };
+  } catch(e) { return null; }
+}
+
+function sendMessage(acc, text) {
+  if (!acc.ws || !acc.connected) { toast(`@${acc.username} не подключён`, 'error'); return false; }
+  if (acc.ws.readyState !== WebSocket.OPEN) { toast(`@${acc.username} соединение нестабильно, подожди...`, 'error'); return false; }
+  if (!text.trim()) return false;
+  try {
+    acc.ws.send(`PRIVMSG #${acc.channel} :${text}`);
+    // Twitch не возвращает эхо отправителю — добавляем локально
+    acc.msgCount++;
+    addChatMessage({
+      username: acc.username,
+      displayName: acc.username,
+      text: text,
+      color: acc.color,
+      channel: '#' + acc.channel,
+      ownAccountId: acc.id,
+      time: nowTime()
+    });
+    renderSidebar();
+    return true;
+  }
+  catch(e) {
+    addLog(`@${acc.username} ошибка отправки: ${e.message}`, 'err');
+    toast(`Ошибка отправки @${acc.username}`, 'error');
+    return false;
+  }
+}
+
+function connectAllToChannel() {
+  const raw = document.getElementById('channelInput').value.trim();
+  if (!raw) { toast('Укажи канал','error'); return; }
+  const ch = parseChannel(raw);
+  state.channel = ch;
+  document.getElementById('channelInput').value = ch;
+  if (state.accounts.length === 0) { toast('Сначала добавь аккаунты','error'); return; }
+  state.accounts.forEach(acc => connectAccount(acc, ch));
+  toast(`Подключаем к #${ch}...`, 'info');
+}
+
+function connectSingle(id) {
+  const acc = getAccount(id);
+  if (!acc) return;
+  if (!state.channel) { toast('Укажи канал вверху','error'); return; }
+  connectAccount(acc, state.channel);
+}
+
+function disconnectSingle(id) {
+  const acc = getAccount(id);
+  if (!acc) return;
+  disconnectAccount(acc);
+  renderSidebar(); updateStatus();
+}
+
+// CHAT
+function addChatMessage(data) {
+  state.messages.push(data);
+  if (state.activeTab === 'chat') appendMsgEl(data);
+  renderPerAccountMessages();
+}
+
+function addSystemMsg(text) {
+  const area = document.getElementById('chatArea');
+  const el = document.createElement('div');
+  el.className = 'system-msg';
+  el.textContent = `— ${text} —`;
+  area.appendChild(el);
+  area.scrollTop = area.scrollHeight;
+}
+
+function appendMsgEl(data) {
+  const area = document.getElementById('chatArea');
+  const placeholder = area.querySelector('.system-msg');
+  if (placeholder) placeholder.remove();
+  const el = document.createElement('div');
+  el.className = `chat-msg${data.ownAccountId ? ' own' : ''}`;
+  el.innerHTML = `<span class="chat-msg-time">${data.time||nowTime()}</span><span class="chat-msg-author" style="color:${data.color||'#9147ff'}">${escapeHtml(data.displayName||data.username)}</span><span class="chat-msg-text">${escapeHtml(data.text)}</span>`;
+  area.appendChild(el);
+  area.scrollTop = area.scrollHeight;
+}
+
+function renderChatChips() {
+  const wrap = document.getElementById('chatAccountChips');
+  wrap.innerHTML = '';
+  const allChip = document.createElement('div');
+  allChip.className = `account-chip all-chip${state.selectedSendAccounts.size===0?' selected':''}`;
+  allChip.innerHTML = `<span class="chip-dot" style="background:var(--green)"></span>Все онлайн`;
+  allChip.onclick = () => { state.selectedSendAccounts.clear(); renderChatChips(); };
+  wrap.appendChild(allChip);
+  state.accounts.forEach(acc => {
+    const chip = document.createElement('div');
+    chip.className = `account-chip${state.selectedSendAccounts.has(acc.id)?' selected':''}`;
+    chip.innerHTML = `<span class="chip-dot" style="background:${acc.color};${acc.connected?`box-shadow:0 0 6px ${acc.color}`:'opacity:.3'}"></span>@${acc.username}`;
+    chip.onclick = () => {
+      state.selectedSendAccounts.has(acc.id) ? state.selectedSendAccounts.delete(acc.id) : state.selectedSendAccounts.add(acc.id);
+      renderChatChips();
+    };
+    wrap.appendChild(chip);
+  });
+}
+
+function handleChatKey(e) { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); } }
+
+function updateCharCount() {
+  const len = document.getElementById('chatMsgInput').value.length;
+  const el = document.getElementById('charCount');
+  el.textContent = `${len} / 500`;
+  el.className = `char-count${len>450?' warn':''}${len>500?' over':''}`;
+}
+
+function sendChatMessage() {
+  const text = document.getElementById('chatMsgInput').value.trim();
+  if (!text) return;
+  if (text.length > 500) { toast('Слишком длинное (макс 500)','error'); return; }
+  const targets = state.selectedSendAccounts.size === 0
+    ? state.accounts.filter(a => a.connected)
+    : state.accounts.filter(a => state.selectedSendAccounts.has(a.id) && a.connected);
+  if (!targets.length) { toast('Нет подключённых аккаунтов','error'); return; }
+  targets.forEach(acc => sendMessage(acc, text));
+  document.getElementById('chatMsgInput').value = '';
+  updateCharCount();
+}
+
+// SIDEBAR
+function renderSidebar() {
+  const list = document.getElementById('accountsList');
+  if (!state.accounts.length) { list.innerHTML = '<div class="empty-state"><p>Нет аккаунтов</p></div>'; document.getElementById('accountCount').textContent='0/0'; return; }
+  const conn = state.accounts.filter(a => a.connected).length;
+  document.getElementById('accountCount').textContent = `${conn}/${state.accounts.length}`;
+  list.innerHTML = '';
+  state.accounts.forEach(acc => {
+    const card = document.createElement('div');
+    card.className = 'account-card';
+    card.innerHTML = `
+      <div class="account-header">
+        <div class="account-avatar ${acc.connected?'online':'offline'}" style="background:${acc.color}22;color:${acc.color}">${getInitials(acc.username)}</div>
+        <div class="account-info">
+          <div class="account-name">@${acc.username}</div>
+          <div class="account-status"><div class="dot ${acc.connected?'online':''}"></div>${acc.connected?`#${acc.channel} · ${acc.msgCount} msg`:'Не подключён'}</div>
+        </div>
+      </div>
+      <div class="account-controls">
+        ${!acc.connected
+          ? `<button class="btn btn-green btn-xs" onclick="connectSingle('${acc.id}')">Подключить</button>`
+          : `<button class="btn btn-outline btn-xs" onclick="disconnectSingle('${acc.id}')">Отключить</button>`
+        }
+        <button class="btn btn-red btn-xs" onclick="removeAccount('${acc.id}')">Удалить</button>
+      </div>`;
+    list.appendChild(card);
+  });
+}
+
+function updateStatus() {
+  const conn = state.accounts.filter(a => a.connected).length, total = state.accounts.length;
+  const dot = document.getElementById('globalDot'), txt = document.getElementById('globalStatusText');
+  if (!total) { dot.className='dot'; txt.textContent='Нет аккаунтов'; }
+  else if (!conn) { dot.className='dot'; txt.textContent='Все отключены'; }
+  else if (conn===total) { dot.className='dot online'; txt.textContent=`${conn}/${total} онлайн`; }
+  else { dot.className='dot partial'; txt.textContent=`${conn}/${total} онлайн`; }
+}
+
+// PER ACCOUNT TAB
+function renderPerAccountTab() {
+  const area = document.getElementById('perAccountArea');
+  if (!state.accounts.length) { area.innerHTML='<div class="empty-state"><p>Добавь аккаунты</p></div>'; return; }
+  area.innerHTML = '';
+  state.accounts.forEach(acc => {
+    const msgs = state.messages.filter(m => m.username.toLowerCase()===acc.username.toLowerCase());
+    const wrap = document.createElement('div');
+    wrap.id = `acc-block-${acc.id}`;
+    wrap.style.cssText = 'background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px';
+    wrap.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <div style="width:36px;height:36px;border-radius:50%;background:${acc.color}22;color:${acc.color};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;border:2px solid ${acc.connected?acc.color:'var(--text3)'}">
+          ${getInitials(acc.username)}
+        </div>
+        <div>
+          <div style="font-size:14px;font-weight:700;color:${acc.color}">@${acc.username}</div>
+          <div style="font-size:11px;color:var(--text3)">${acc.connected?`✅ #${acc.channel}`:'❌ Не подключён'} · ${acc.msgCount} отправлено</div>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:6px">
+          ${!acc.connected
+            ? `<button class="btn btn-green btn-xs" onclick="connectSingle('${acc.id}')">Подключить</button>`
+            : `<button class="btn btn-outline btn-xs" onclick="disconnectSingle('${acc.id}')">Отключить</button>`
+          }
+        </div>
+      </div>
+      <div id="acc-log-${acc.id}" style="background:var(--bg4);border-radius:6px;padding:8px;max-height:120px;overflow-y:auto;margin-bottom:10px;font-size:12px;color:var(--text3)">
+        ${msgs.length ? msgs.slice(-10).map(m=>`<div style="padding:2px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text3)">[${m.time}]</span> ${escapeHtml(m.text)}</div>`).join('') : '<div>Нет сообщений</div>'}
+      </div>
+      <div style="display:flex;gap:6px">
+        <input class="form-input" id="per-input-${acc.id}" placeholder="Сообщение от @${acc.username}..." style="flex:1" onkeydown="if(event.key==='Enter'){sendPerAccount('${acc.id}');event.preventDefault()}">
+        <button class="btn btn-purple btn-sm" onclick="sendPerAccount('${acc.id}')">Отправить</button>
+      </div>`;
+    area.appendChild(wrap);
+  });
+}
+
+function renderPerAccountMessages() {
+  state.accounts.forEach(acc => {
+    const el = document.getElementById(`acc-log-${acc.id}`);
+    if (!el) return;
+    const msgs = state.messages.filter(m => m.username.toLowerCase()===acc.username.toLowerCase());
+    if (!msgs.length) return;
+    el.innerHTML = msgs.slice(-10).map(m=>`<div style="padding:2px 0;border-bottom:1px solid var(--border)"><span style="color:var(--text3)">[${m.time}]</span> ${escapeHtml(m.text)}</div>`).join('');
+    el.scrollTop = el.scrollHeight;
+  });
+}
+
+function sendPerAccount(id) {
+  const acc = getAccount(id);
+  const input = document.getElementById(`per-input-${id}`);
+  if (!input || !acc) return;
+  const text = input.value.trim();
+  if (!text) return;
+  if (!acc.connected) { toast(`@${acc.username} не подключён`,'error'); return; }
+  if (sendMessage(acc, text)) input.value = '';
+}
+
+// BROADCAST
+function renderBroadcastList() {
+  const list = document.getElementById('broadcastAccountList');
+  if (!state.accounts.length) { list.innerHTML='<div style="font-size:12px;color:var(--text3)">Нет аккаунтов</div>'; return; }
+  list.innerHTML = '';
+  state.accounts.forEach(acc => {
+    const row = document.createElement('div');
+    row.className = 'bc-account-row';
+    const checked = state.broadcastSelected.has(acc.id);
+    row.innerHTML = `
+      <div class="bc-checkbox${checked?' checked':''}" onclick="toggleBroadcast('${acc.id}',this)"></div>
+      <div style="width:22px;height:22px;border-radius:50%;background:${acc.color}22;color:${acc.color};display:flex;align-items:center;justify-content:center;font-weight:800;font-size:9px;border:1px solid ${acc.color}">${getInitials(acc.username)}</div>
+      <div class="bc-name">@${acc.username}</div>
+      <div style="font-size:11px;color:${acc.connected?'var(--green)':'var(--text3)'}">${acc.connected?'●':'○'}</div>`;
+    list.appendChild(row);
+  });
+}
+
+function toggleBroadcast(id, el) {
+  state.broadcastSelected.has(id) ? (state.broadcastSelected.delete(id), el.classList.remove('checked')) : (state.broadcastSelected.add(id), el.classList.add('checked'));
+}
+function selectAllBroadcast() { state.accounts.forEach(a => state.broadcastSelected.add(a.id)); renderBroadcastList(); }
+function deselectAllBroadcast() { state.broadcastSelected.clear(); renderBroadcastList(); }
+
+async function startBroadcast() {
+  const text = document.getElementById('broadcastMsg').value.trim();
+  if (!text) { toast('Введи сообщение','error'); return; }
+  const targets = state.accounts.filter(a => state.broadcastSelected.has(a.id) && a.connected);
+  if (!targets.length) { toast('Нет подключённых выбранных аккаунтов','error'); return; }
+  const delay = parseInt(document.getElementById('broadcastDelay').value)||0;
+  const progress = document.getElementById('broadcastProgress');
+  const bar = document.getElementById('progressBar');
+  const label = document.getElementById('progressLabel');
+  progress.style.display = 'block';
+  for (let i = 0; i < targets.length; i++) {
+    const acc = targets[i];
+    label.textContent = `Отправка ${i+1}/${targets.length}: @${acc.username}`;
+    bar.style.width = Math.round(((i+1)/targets.length)*100)+'%';
+    sendMessage(acc, text);
+    addLog(`Broadcast → @${acc.username}`, 'ok');
+    if (delay > 0 && i < targets.length-1) await sleep(delay);
+  }
+  label.textContent = `✅ Отправлено ${targets.length} аккаунтам`;
+  toast(`Broadcast отправлен ${targets.length} аккаунтам`, 'success');
+  setTimeout(() => { progress.style.display='none'; bar.style.width='0'; }, 3000);
+}
+
+// QUEUE
+function renderQueueAccountSelect() {
+  const sel = document.getElementById('queueAccount');
+  sel.innerHTML = '<option value="">Выбрать аккаунт...</option>';
+  state.accounts.forEach(acc => { const o = document.createElement('option'); o.value=acc.id; o.textContent=`@${acc.username}`; sel.appendChild(o); });
+}
+
+function addToQueue() {
+  const accountId = document.getElementById('queueAccount').value;
+  const text = document.getElementById('queueMsg').value.trim();
+  const delay = parseInt(document.getElementById('queueDelay').value)||0;
+  if (!accountId) { toast('Выбери аккаунт','error'); return; }
+  if (!text) { toast('Введи текст','error'); return; }
+  state.queue.push({ id: uid(), accountId, text, delay, sent: false });
+  document.getElementById('queueMsg').value = '';
+  renderQueueList();
+}
+
+function renderQueueList() {
+  const list = document.getElementById('queueList');
+  if (!state.queue.length) { list.innerHTML='<div class="empty-state"><p>Очередь пуста.</p></div>'; return; }
+  list.innerHTML = '';
+  state.queue.forEach((item, i) => {
+    const acc = getAccount(item.accountId);
+    const el = document.createElement('div');
+    el.className = `queue-item${item.sent?' sent':''}`;
+    el.innerHTML = `
+      <div class="queue-item-num">#${i+1}${item.sent?' ✓':''}</div>
+      <div class="queue-item-body">
+        <div class="queue-item-account" style="color:${acc?acc.color:'var(--text3)'}">@${acc?acc.username:'???'}</div>
+        <div class="queue-item-text">${escapeHtml(item.text)}</div>
+        ${item.delay>0?`<div class="queue-item-delay">⏱ +${item.delay}мс</div>`:''}
+      </div>
+      <div>${!item.sent?`<button class="btn btn-red btn-xs" onclick="removeQueueItem('${item.id}')">✕</button>`:''}</div>`;
+    list.appendChild(el);
+  });
+}
+
+function removeQueueItem(id) { state.queue = state.queue.filter(q => q.id!==id); renderQueueList(); }
+function clearQueue() { state.queue=[]; renderQueueList(); document.getElementById('queueStatus').textContent=''; }
+
+async function runQueue() {
+  if (state.queueRunning) { toast('Уже запущено','info'); return; }
+  const pending = state.queue.filter(q => !q.sent);
+  if (!pending.length) { toast('Нет задач','info'); return; }
+  state.queueRunning = true;
+  document.getElementById('queueStartBtn').disabled = true;
+  for (let i = 0; i < pending.length; i++) {
+    const item = pending[i];
+    const acc = getAccount(item.accountId);
+    document.getElementById('queueStatus').textContent = `Задача ${i+1}/${pending.length}...`;
+    if (item.delay > 0 && i > 0) await sleep(item.delay);
+    if (acc && acc.connected) { sendMessage(acc, item.text); addLog(`Queue → @${acc.username}: "${item.text.slice(0,40)}"`, 'ok'); }
+    else { addLog(`Queue ПРОПУЩЕНО @${acc?acc.username:'???'} (не подключён)`, 'err'); }
+    item.sent = true;
+    renderQueueList();
+  }
+  state.queueRunning = false;
+  document.getElementById('queueStartBtn').disabled = false;
+  document.getElementById('queueStatus').textContent = `✅ ${pending.length} задач выполнено`;
+  toast('Очередь выполнена!', 'success');
+}
+
+// TABS
+function switchTab(tab, btn) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-'+tab).classList.add('active');
+  state.activeTab = tab;
+  if (tab === 'chat') {
+    const area = document.getElementById('chatArea');
+    area.innerHTML = '';
+    if (!state.messages.length) area.innerHTML = '<div class="system-msg">Подключи аккаунты и укажи канал для начала</div>';
+    else state.messages.forEach(m => appendMsgEl(m));
+  }
+  if (tab === 'perAccount') renderPerAccountTab();
+  if (tab === 'broadcast') renderBroadcastList();
+  if (tab === 'queue') { renderQueueAccountSelect(); renderQueueList(); }
+}
+
+function renderAll() {
+  renderSidebar(); renderChatChips(); renderBroadcastList(); renderQueueAccountSelect(); renderPerAccountTab(); updateStatus();
+}
+
+renderAll();
+</script>
+</body>
+</html>
