@@ -247,6 +247,24 @@
         2. Войди через нужный аккаунт Twitch<br>
         3. Скопируй токен <strong>oauth:xxx...</strong>
       </div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+        <div class="form-title">⚙️ Client-ID (для фолловинга)</div>
+        <div class="form-field">
+          <label>Twitch Client-ID</label>
+          <input class="form-input" id="clientIdInput" placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off">
+          <div class="form-hint">
+            Получи на <a href="https://dev.twitch.tv/console/apps/create" target="_blank">dev.twitch.tv/console</a>:<br>
+            1. Создай приложение (любое название)<br>
+            2. OAuth Redirect → <strong>https://twitchapps.com/tmi/</strong><br>
+            3. Category → <strong>Chat Bot</strong><br>
+            4. Скопируй Client ID
+          </div>
+        </div>
+        <div class="form-field">
+          <label style="font-size:11px;color:var(--text3)">Токены нужны со scope <strong>user:write:follows</strong>.<br>Получи на <a href="https://twitchapps.com/tmi/" target="_blank">twitchapps.com/tmi</a> — он включает нужные права.</label>
+        </div>
+        <button class="btn btn-outline btn-sm" style="width:100%" onclick="saveClientId()">Сохранить Client-ID</button>
+      </div>
     </div>
   </div>
 
@@ -1437,22 +1455,43 @@ function sleepAbortable(ms, shouldAbort) {
 }
 
 // ══════════════════════════════════════════
-// FOLLOW API
+// FOLLOW API — Helix + пользовательский Client-ID
 // ══════════════════════════════════════════
-// Используем Kraken v5 API — работает с OAuth токеном без Client-Id
-// PUT /kraken/users/<user_id>/follows/channels/<channel_id>
+function getClientId() {
+  return (document.getElementById('clientIdInput')?.value || '').trim()
+      || localStorage.getItem('twitchClientId') || '';
+}
+
+function saveClientId() {
+  const cid = document.getElementById('clientIdInput').value.trim();
+  if (!cid) { toast('Введи Client-ID', 'error'); return; }
+  localStorage.setItem('twitchClientId', cid);
+  toast('Client-ID сохранён!', 'success');
+}
+
+function loadClientId() {
+  const cid = localStorage.getItem('twitchClientId');
+  if (cid) {
+    const el = document.getElementById('clientIdInput');
+    if (el) el.value = cid;
+  }
+}
 
 async function followChannel(accId) {
   const acc = getAccount(accId);
   if (!acc) return;
   if (!state.channel) { toast('Сначала укажи канал вверху', 'error'); return; }
 
-  addLog(`[v4] followChannel: broadcasterId=${state.broadcasterId || 'НЕТ'}`, 'info');
+  const clientId = getClientId();
+  if (!clientId) {
+    toast('Введи Client-ID в сайдбаре (раздел ⚙️)', 'error');
+    addLog('❌ Нет Client-ID. Заполни поле Client-ID в сайдбаре.', 'err');
+    return;
+  }
 
-  // Проверяем что broadcaster_id уже получен из IRC (ROOMSTATE)
   if (!state.broadcasterId) {
-    toast('Подключись к каналу сначала — нужен room-id из IRC', 'error');
-    addLog('❌ Нет broadcasterId! Нажми "Подключить всех" и дождись строки "room-id канала: ..." в логе.', 'err');
+    toast('Сначала подключись к каналу', 'error');
+    addLog('❌ Нет room-id. Нажми "Подключить всех" и дождись подключения.', 'err');
     return;
   }
 
@@ -1461,45 +1500,42 @@ async function followChannel(accId) {
 
   try {
     const cleanToken = acc.token.replace('oauth:', '');
+    const headers = {
+      'Authorization': `Bearer ${cleanToken}`,
+      'Client-Id': clientId,
+      'Content-Type': 'application/json'
+    };
 
-    // Шаг 1: получить user_id нашего аккаунта через Kraken (не требует Client-Id)
+    // Шаг 1: user_id нашего аккаунта
     let userId = acc.userId;
     if (!userId) {
-      addLog(`@${acc.username} → получаем user_id через Kraken...`, 'info');
-      const r = await fetch('https://api.twitch.tv/kraken/user', {
-        headers: {
-          'Authorization': `OAuth ${cleanToken}`,
-          'Accept': 'application/vnd.twitchtv.v5+json'
-        }
-      });
-      if (!r.ok) {
-        const e = await r.json().catch(()=>({}));
-        throw new Error(e.message || `Kraken /user: HTTP ${r.status}`);
-      }
+      addLog(`@${acc.username} → получаем user_id...`, 'info');
+      const r = await fetch('https://api.twitch.tv/helix/users', { headers });
       const d = await r.json();
-      userId = d._id?.toString();
-      if (!userId) throw new Error('Не удалось получить user_id из токена');
+      if (!r.ok) throw new Error(d.message || `GET /users: HTTP ${r.status}`);
+      userId = d.data?.[0]?.id;
+      if (!userId) throw new Error('Не удалось получить user_id — проверь токен и Client-ID');
       acc.userId = userId;
       addLog(`@${acc.username} user_id=${userId}`, 'info');
     }
 
-    // Шаг 2: PUT follow через Kraken
-    addLog(`@${acc.username} → PUT follow user=${userId} → channel=${state.broadcasterId}`, 'info');
-    const followRes = await fetch(`https://api.twitch.tv/kraken/users/${userId}/follows/channels/${state.broadcasterId}`, {
-      method: 'PUT',
-      headers: {
-        'Authorization': `OAuth ${cleanToken}`,
-        'Accept': 'application/vnd.twitchtv.v5+json'
-      }
+    // Шаг 2: POST follow
+    addLog(`@${acc.username} → follow user=${userId} → broadcaster=${state.broadcasterId}`, 'info');
+    const r = await fetch('https://api.twitch.tv/helix/channels/followed', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ broadcaster_id: state.broadcasterId, user_id: userId })
     });
 
-    if (followRes.status === 200 || followRes.status === 204) {
+    if (r.status === 204 || r.status === 200) {
       acc.followStatus = 'followed';
       addLog(`@${acc.username} ✅ зафолловил #${state.channel}`, 'ok');
       toast(`@${acc.username} зафолловил #${state.channel}!`, 'success');
     } else {
-      const errData = await followRes.json().catch(() => ({}));
-      throw new Error(errData.message || `HTTP ${followRes.status}`);
+      const d = await r.json().catch(() => ({}));
+      if (r.status === 401) throw new Error('Ошибка 401: токен устарел или нет scope user:write:follows');
+      if (r.status === 403) throw new Error('Ошибка 403: нет прав. Нужен scope user:write:follows');
+      throw new Error(d.message || `HTTP ${r.status}`);
     }
 
   } catch(e) {
@@ -1514,7 +1550,8 @@ async function followChannel(accId) {
 
 async function followAllAccounts() {
   if (!state.channel) { toast('Сначала укажи канал', 'error'); return; }
-  if (!state.broadcasterId) { toast('Сначала подключись к каналу (нужен room-id)', 'error'); return; }
+  if (!state.broadcasterId) { toast('Сначала подключись к каналу', 'error'); return; }
+  if (!getClientId()) { toast('Введи Client-ID в сайдбаре', 'error'); return; }
   const targets = state.accounts.filter(a => a.followStatus !== 'followed');
   if (!targets.length) { toast('Все аккаунты уже фолловят канал', 'info'); return; }
   toast(`Фолловим #${state.channel} с ${targets.length} аккаунтов...`, 'info');
@@ -1564,6 +1601,7 @@ function loadAccounts() {
 
 // INIT
 loadAccounts();
+loadClientId();
 renderAll();
 </script>
 </body>
