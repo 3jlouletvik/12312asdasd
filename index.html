@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Twitch Multi-Chat Panel</title>
+<title>TwitchMultiChat v4</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -1447,10 +1447,12 @@ async function followChannel(accId) {
   if (!acc) return;
   if (!state.channel) { toast('Сначала укажи канал вверху', 'error'); return; }
 
+  addLog(`[v4] followChannel: broadcasterId=${state.broadcasterId || 'НЕТ'}`, 'info');
+
   // Проверяем что broadcaster_id уже получен из IRC (ROOMSTATE)
   if (!state.broadcasterId) {
     toast('Подключись к каналу сначала — нужен room-id из IRC', 'error');
-    addLog('Нет broadcaster_id. Нажми "Подключить всех" и дождись подключения.', 'err');
+    addLog('❌ Нет broadcasterId! Нажми "Подключить всех" и дождись строки "room-id канала: ..." в логе.', 'err');
     return;
   }
 
