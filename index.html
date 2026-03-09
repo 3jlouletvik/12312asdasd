@@ -255,6 +255,7 @@
       <button class="tab-btn" onclick="switchTab('perAccount',this)">👤 По аккаунтам</button>
       <button class="tab-btn" onclick="switchTab('broadcast',this)">📡 Broadcast</button>
       <button class="tab-btn" onclick="switchTab('queue',this)">📋 Очередь</button>
+      <button class="tab-btn" onclick="switchTab('auto',this)">🤖 Автодиалог</button>
       <button class="tab-btn" onclick="switchTab('log',this)">🔌 Лог</button>
     </div>
 
@@ -350,6 +351,125 @@
           <button class="btn btn-red" onclick="clearQueue()">🗑 Очистить</button>
           <span style="font-size:12px;color:var(--text3);align-self:center" id="queueStatus"></span>
         </div>
+      </div>
+    </div>
+
+    <!-- AUTO DIALOG TAB -->
+    <div class="tab-content" id="tab-auto">
+      <div style="flex:1;overflow-y:auto;padding:20px">
+
+        <div style="margin-bottom:20px">
+          <h2 style="font-size:20px;font-weight:800;margin-bottom:4px">🤖 Автодиалог</h2>
+          <p style="font-size:13px;color:var(--text3)">Аккаунты общаются между собой автоматически</p>
+        </div>
+
+        <!-- MODE TABS -->
+        <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">
+          <button class="btn btn-purple btn-sm" id="autoModeBtn-scenario" onclick="setAutoMode('scenario')">📜 Сценарий</button>
+          <button class="btn btn-outline btn-sm" id="autoModeBtn-trigger" onclick="setAutoMode('trigger')">⚡ Триггеры</button>
+          <button class="btn btn-outline btn-sm" id="autoModeBtn-random" onclick="setAutoMode('random')">🎲 Рандом</button>
+          <button class="btn btn-outline btn-sm" id="autoModeBtn-react" onclick="setAutoMode('react')">👁 Реакция</button>
+        </div>
+
+        <!-- SCENARIO MODE -->
+        <div id="autoPanel-scenario">
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px">
+            <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:12px">Шаги сценария</div>
+            <div id="scenarioSteps" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+            <div style="display:grid;grid-template-columns:1fr 2fr auto auto;gap:6px;align-items:center">
+              <select class="queue-select" id="scAcc" style="font-size:12px"><option value="">Аккаунт...</option></select>
+              <input class="form-input" id="scMsg" placeholder="Текст сообщения..." style="font-size:12px">
+              <input type="number" class="delay-input" id="scDelay" value="5" min="1" style="width:55px" title="Задержка (сек)">
+              <button class="btn btn-purple btn-xs" onclick="addScenarioStep()">+ Шаг</button>
+            </div>
+            <div style="font-size:11px;color:var(--text3);margin-top:6px">Задержка в секундах перед этим сообщением</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <label style="font-size:12px;color:var(--text3)">Повторять:</label>
+            <select class="queue-select" id="scLoop" style="font-size:12px;width:auto">
+              <option value="1">1 раз</option>
+              <option value="3">3 раза</option>
+              <option value="5">5 раз</option>
+              <option value="0">∞ бесконечно</option>
+            </select>
+            <button class="btn btn-green btn-sm" id="scStartBtn" onclick="startScenario()">▶ Запустить</button>
+            <button class="btn btn-red btn-sm" id="scStopBtn" onclick="stopAuto()" style="display:none">⏹ Стоп</button>
+            <button class="btn btn-outline btn-sm" onclick="clearScenario()">🗑 Очистить</button>
+            <span id="scStatus" style="font-size:12px;color:var(--text3)"></span>
+          </div>
+        </div>
+
+        <!-- TRIGGER MODE -->
+        <div id="autoPanel-trigger" style="display:none">
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px">
+            <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:12px">Правила триггеров</div>
+            <div id="triggerRules" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 2fr auto;gap:6px;align-items:center">
+              <input class="form-input" id="trgKeyword" placeholder="Ключевое слово..." style="font-size:12px">
+              <select class="queue-select" id="trgAcc" style="font-size:12px"><option value="">Отвечает...</option></select>
+              <input class="form-input" id="trgReply" placeholder="Ответ (используй {user} для имени)..." style="font-size:12px">
+              <button class="btn btn-purple btn-xs" onclick="addTrigger()">+ Добавить</button>
+            </div>
+            <div style="font-size:11px;color:var(--text3);margin-top:6px">{user} = имя автора сообщения, {msg} = оригинальный текст</div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-green btn-sm" id="trgStartBtn" onclick="startTriggers()">▶ Включить триггеры</button>
+            <button class="btn btn-red btn-sm" id="trgStopBtn" onclick="stopTriggers()" style="display:none">⏹ Выключить</button>
+            <label style="font-size:12px;color:var(--text3)">Задержка ответа:</label>
+            <input type="number" class="delay-input" id="trgDelay" value="3" min="1" style="width:55px">
+            <span style="font-size:12px;color:var(--text3)">сек</span>
+          </div>
+        </div>
+
+        <!-- RANDOM MODE -->
+        <div id="autoPanel-random" style="display:none">
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px">
+            <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:12px">Пул сообщений</div>
+            <div id="randomPool" style="display:flex;flex-direction:column;gap:4px;margin-bottom:10px;max-height:200px;overflow-y:auto"></div>
+            <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:6px;align-items:center">
+              <select class="queue-select" id="rndAcc" style="font-size:12px"><option value="">Аккаунт...</option></select>
+              <input class="form-input" id="rndMsg" placeholder="Сообщение..." style="font-size:12px" onkeydown="if(event.key==='Enter')addRandomMsg()">
+              <button class="btn btn-purple btn-xs" onclick="addRandomMsg()">+ Добавить</button>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <label style="font-size:12px;color:var(--text3)">Интервал:</label>
+            <input type="number" class="delay-input" id="rndMin" value="15" min="5" style="width:55px">
+            <span style="font-size:12px;color:var(--text3)">–</span>
+            <input type="number" class="delay-input" id="rndMax" value="45" min="5" style="width:55px">
+            <span style="font-size:12px;color:var(--text3)">сек (случайно)</span>
+            <button class="btn btn-green btn-sm" id="rndStartBtn" onclick="startRandom()">▶ Запустить</button>
+            <button class="btn btn-red btn-sm" id="rndStopBtn" onclick="stopRandom()" style="display:none">⏹ Стоп</button>
+            <span id="rndStatus" style="font-size:12px;color:var(--text3)"></span>
+          </div>
+        </div>
+
+        <!-- REACT MODE -->
+        <div id="autoPanel-react" style="display:none">
+          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px">
+            <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:10px">Авто-реакция на реальных зрителей</div>
+            <p style="font-size:12px;color:var(--text3);margin-bottom:12px;line-height:1.7">Когда реальный зритель пишет в чат — один из твоих аккаунтов автоматически отвечает случайной фразой из списка.</p>
+            <div id="reactRules" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px;max-height:180px;overflow-y:auto"></div>
+            <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:6px;align-items:center">
+              <select class="queue-select" id="reactAcc" style="font-size:12px"><option value="">Отвечает...</option></select>
+              <input class="form-input" id="reactMsg" placeholder="Ответная фраза (используй {user})..." style="font-size:12px" onkeydown="if(event.key==='Enter')addReactRule()">
+              <button class="btn btn-purple btn-xs" onclick="addReactRule()">+ Добавить</button>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <label style="font-size:12px;color:var(--text3)">Вероятность срабатывания:</label>
+            <input type="number" class="delay-input" id="reactChance" value="30" min="1" max="100" style="width:55px">
+            <span style="font-size:12px;color:var(--text3)">% на каждое сообщение</span>
+            <label style="font-size:12px;color:var(--text3);margin-left:8px">Задержка:</label>
+            <input type="number" class="delay-input" id="reactDelay" value="4" min="1" style="width:55px">
+            <span style="font-size:12px;color:var(--text3)">сек</span>
+          </div>
+          <div style="margin-top:8px;display:flex;gap:8px">
+            <button class="btn btn-green btn-sm" id="reactStartBtn" onclick="startReact()">▶ Включить реакции</button>
+            <button class="btn btn-red btn-sm" id="reactStopBtn" onclick="stopReact()" style="display:none">⏹ Выключить</button>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -650,6 +770,11 @@ function addChatMessage(data) {
   state.messages.push(data);
   if (state.activeTab === 'chat') appendMsgEl(data);
   renderPerAccountMessages();
+  // Автодиалог — только на чужие сообщения
+  if (!data.ownAccountId) {
+    checkTriggers(data);
+    checkReact(data);
+  }
 }
 
 function addSystemMsg(text) {
@@ -936,10 +1061,354 @@ function switchTab(tab, btn) {
   if (tab === 'perAccount') renderPerAccountTab();
   if (tab === 'broadcast') renderBroadcastList();
   if (tab === 'queue') { renderQueueAccountSelect(); renderQueueList(); }
+  if (tab === 'auto') renderAutoSelects();
 }
 
 function renderAll() {
   renderSidebar(); renderChatChips(); renderBroadcastList(); renderQueueAccountSelect(); renderPerAccountTab(); updateStatus();
+}
+
+// ══════════════════════════════════════════
+// AUTO-DIALOG
+// ══════════════════════════════════════════
+const auto = {
+  mode: 'scenario',
+  // Scenario
+  steps: [],           // [{accId, text, delay}]
+  scRunning: false,
+  scAbort: false,
+  // Triggers
+  triggers: [],        // [{keyword, accId, reply}]
+  trgActive: false,
+  // Random
+  randomPool: [],      // [{accId, text}]
+  rndRunning: false,
+  rndTimer: null,
+  // React
+  reactRules: [],      // [{accId, reply}]
+  reactActive: false,
+};
+
+function setAutoMode(mode) {
+  auto.mode = mode;
+  ['scenario','trigger','random','react'].forEach(m => {
+    document.getElementById('autoPanel-'+m).style.display = m===mode ? '' : 'none';
+    const btn = document.getElementById('autoModeBtn-'+m);
+    btn.className = m===mode ? 'btn btn-purple btn-sm' : 'btn btn-outline btn-sm';
+  });
+}
+
+function renderAutoSelects() {
+  ['scAcc','trgAcc','rndAcc','reactAcc'].forEach(id => {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    const val = sel.value;
+    sel.innerHTML = '<option value="">Аккаунт...</option>';
+    state.accounts.forEach(acc => {
+      const o = document.createElement('option');
+      o.value = acc.id; o.textContent = `@${acc.username}`;
+      sel.appendChild(o);
+    });
+    sel.value = val;
+  });
+  renderScenarioSteps();
+  renderTriggerRules();
+  renderRandomPool();
+  renderReactRules();
+}
+
+// ── SCENARIO ──
+function addScenarioStep() {
+  const accId = document.getElementById('scAcc').value;
+  const text = document.getElementById('scMsg').value.trim();
+  const delay = parseInt(document.getElementById('scDelay').value) || 5;
+  if (!accId) { toast('Выбери аккаунт','error'); return; }
+  if (!text) { toast('Введи текст','error'); return; }
+  auto.steps.push({ id: uid(), accId, text, delay });
+  document.getElementById('scMsg').value = '';
+  renderScenarioSteps();
+}
+
+function renderScenarioSteps() {
+  const el = document.getElementById('scenarioSteps');
+  if (!el) return;
+  if (!auto.steps.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text3)">Нет шагов. Добавь ниже.</div>'; return; }
+  el.innerHTML = '';
+  auto.steps.forEach((step, i) => {
+    const acc = getAccount(step.accId);
+    const div = document.createElement('div');
+    div.style.cssText = 'display:flex;align-items:center;gap:8px;background:var(--bg4);border-radius:6px;padding:7px 10px;font-size:12px';
+    div.innerHTML = `
+      <span style="color:var(--text3);font-family:monospace">#${i+1}</span>
+      <span style="font-weight:700;color:${acc?acc.color:'var(--text3)'};min-width:80px">@${acc?acc.username:'???'}</span>
+      <span style="flex:1;color:var(--text)">${escapeHtml(step.text)}</span>
+      <span style="color:var(--text3);white-space:nowrap">⏱ ${step.delay}с</span>
+      <button class="btn btn-red btn-xs" onclick="removeScenarioStep('${step.id}')">✕</button>`;
+    el.appendChild(div);
+  });
+}
+
+function removeScenarioStep(id) {
+  auto.steps = auto.steps.filter(s => s.id !== id);
+  renderScenarioSteps();
+}
+
+function clearScenario() {
+  auto.steps = [];
+  renderScenarioSteps();
+}
+
+async function startScenario() {
+  if (auto.scRunning) return;
+  if (!auto.steps.length) { toast('Добавь шаги','error'); return; }
+  const loopCount = parseInt(document.getElementById('scLoop').value);
+  auto.scRunning = true;
+  auto.scAbort = false;
+  document.getElementById('scStartBtn').style.display = 'none';
+  document.getElementById('scStopBtn').style.display = '';
+
+  let iter = 0;
+  while (!auto.scAbort && (loopCount === 0 || iter < loopCount)) {
+    iter++;
+    for (let i = 0; i < auto.steps.length; i++) {
+      if (auto.scAbort) break;
+      const step = auto.steps[i];
+      const acc = getAccount(step.accId);
+      document.getElementById('scStatus').textContent = `Итерация ${iter}${loopCount>0?'/'+loopCount:''} · шаг ${i+1}/${auto.steps.length}`;
+      // Задержка перед шагом
+      await sleepAbortable(step.delay * 1000, () => auto.scAbort);
+      if (auto.scAbort) break;
+      if (acc && acc.connected) {
+        sendMessage(acc, step.text);
+        addLog(`🤖 Сценарий → @${acc.username}: "${step.text.slice(0,40)}"`, 'ok');
+      } else {
+        addLog(`🤖 Сценарий ПРОПУЩЕНО @${acc?acc.username:'???'} (не подключён)`, 'err');
+      }
+    }
+  }
+
+  auto.scRunning = false;
+  document.getElementById('scStartBtn').style.display = '';
+  document.getElementById('scStopBtn').style.display = 'none';
+  document.getElementById('scStatus').textContent = auto.scAbort ? '⏹ Остановлено' : '✅ Завершено';
+}
+
+function stopAuto() {
+  auto.scAbort = true;
+}
+
+// ── TRIGGERS ──
+function addTrigger() {
+  const keyword = document.getElementById('trgKeyword').value.trim();
+  const accId = document.getElementById('trgAcc').value;
+  const reply = document.getElementById('trgReply').value.trim();
+  if (!keyword) { toast('Введи ключевое слово','error'); return; }
+  if (!accId) { toast('Выбери аккаунт','error'); return; }
+  if (!reply) { toast('Введи ответ','error'); return; }
+  auto.triggers.push({ id: uid(), keyword: keyword.toLowerCase(), accId, reply });
+  document.getElementById('trgKeyword').value = '';
+  document.getElementById('trgReply').value = '';
+  renderTriggerRules();
+}
+
+function renderTriggerRules() {
+  const el = document.getElementById('triggerRules');
+  if (!el) return;
+  if (!auto.triggers.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text3)">Нет триггеров.</div>'; return; }
+  el.innerHTML = '';
+  auto.triggers.forEach(t => {
+    const acc = getAccount(t.accId);
+    const div = document.createElement('div');
+    div.style.cssText = 'display:flex;align-items:center;gap:8px;background:var(--bg4);border-radius:6px;padding:7px 10px;font-size:12px';
+    div.innerHTML = `
+      <span style="color:var(--yellow);font-weight:700">"${escapeHtml(t.keyword)}"</span>
+      <span style="color:var(--text3)">→</span>
+      <span style="color:${acc?acc.color:'var(--text3)'};font-weight:700">@${acc?acc.username:'???'}</span>
+      <span style="color:var(--text3)">:</span>
+      <span style="flex:1">${escapeHtml(t.reply)}</span>
+      <button class="btn btn-red btn-xs" onclick="removeTrigger('${t.id}')">✕</button>`;
+    el.appendChild(div);
+  });
+}
+
+function removeTrigger(id) { auto.triggers = auto.triggers.filter(t => t.id !== id); renderTriggerRules(); }
+
+function startTriggers() {
+  if (!auto.triggers.length) { toast('Добавь триггеры','error'); return; }
+  auto.trgActive = true;
+  document.getElementById('trgStartBtn').style.display = 'none';
+  document.getElementById('trgStopBtn').style.display = '';
+  toast('Триггеры включены', 'success');
+}
+function stopTriggers() {
+  auto.trgActive = false;
+  document.getElementById('trgStartBtn').style.display = '';
+  document.getElementById('trgStopBtn').style.display = 'none';
+  toast('Триггеры выключены', 'info');
+}
+
+// Вызывается при каждом входящем сообщении
+function checkTriggers(msg) {
+  if (!auto.trgActive || !auto.triggers.length) return;
+  const text = msg.text.toLowerCase();
+  const matchingTriggers = auto.triggers.filter(t => text.includes(t.keyword));
+  if (!matchingTriggers.length) return;
+  const t = matchingTriggers[Math.floor(Math.random() * matchingTriggers.length)];
+  const acc = getAccount(t.accId);
+  if (!acc || !acc.connected) return;
+  // Не отвечаем на свои сообщения
+  if (acc.username.toLowerCase() === msg.username.toLowerCase()) return;
+  const delay = (parseInt(document.getElementById('trgDelay').value) || 3) * 1000;
+  const reply = t.reply.replace('{user}', msg.displayName || msg.username).replace('{msg}', msg.text);
+  setTimeout(() => {
+    if (auto.trgActive && acc.connected) {
+      sendMessage(acc, reply);
+      addLog(`⚡ Триггер "${t.keyword}" → @${acc.username}: "${reply.slice(0,40)}"`, 'ok');
+    }
+  }, delay + Math.random() * 1000);
+}
+
+// ── RANDOM ──
+function addRandomMsg() {
+  const accId = document.getElementById('rndAcc').value;
+  const text = document.getElementById('rndMsg').value.trim();
+  if (!accId) { toast('Выбери аккаунт','error'); return; }
+  if (!text) { toast('Введи текст','error'); return; }
+  auto.randomPool.push({ id: uid(), accId, text });
+  document.getElementById('rndMsg').value = '';
+  renderRandomPool();
+}
+
+function renderRandomPool() {
+  const el = document.getElementById('randomPool');
+  if (!el) return;
+  if (!auto.randomPool.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text3)">Пул пуст.</div>'; return; }
+  el.innerHTML = '';
+  auto.randomPool.forEach(item => {
+    const acc = getAccount(item.accId);
+    const div = document.createElement('div');
+    div.style.cssText = 'display:flex;align-items:center;gap:8px;background:var(--bg4);border-radius:6px;padding:6px 10px;font-size:12px';
+    div.innerHTML = `
+      <span style="color:${acc?acc.color:'var(--text3)'};font-weight:700">@${acc?acc.username:'???'}</span>
+      <span style="flex:1;color:var(--text)">${escapeHtml(item.text)}</span>
+      <button class="btn btn-red btn-xs" onclick="removeRandomMsg('${item.id}')">✕</button>`;
+    el.appendChild(div);
+  });
+}
+
+function removeRandomMsg(id) { auto.randomPool = auto.randomPool.filter(r => r.id !== id); renderRandomPool(); }
+
+function startRandom() {
+  if (auto.rndRunning) return;
+  if (!auto.randomPool.length) { toast('Добавь сообщения в пул','error'); return; }
+  auto.rndRunning = true;
+  document.getElementById('rndStartBtn').style.display = 'none';
+  document.getElementById('rndStopBtn').style.display = '';
+  scheduleRandom();
+}
+
+function stopRandom() {
+  auto.rndRunning = false;
+  if (auto.rndTimer) { clearTimeout(auto.rndTimer); auto.rndTimer = null; }
+  document.getElementById('rndStartBtn').style.display = '';
+  document.getElementById('rndStopBtn').style.display = 'none';
+  document.getElementById('rndStatus').textContent = '⏹ Остановлено';
+}
+
+function scheduleRandom() {
+  if (!auto.rndRunning) return;
+  const minS = parseInt(document.getElementById('rndMin').value) || 15;
+  const maxS = parseInt(document.getElementById('rndMax').value) || 45;
+  const delayMs = (minS + Math.random() * (maxS - minS)) * 1000;
+  document.getElementById('rndStatus').textContent = `Следующее через ~${Math.round(delayMs/1000)}с`;
+  auto.rndTimer = setTimeout(() => {
+    if (!auto.rndRunning) return;
+    // Выбираем случайное сообщение из пула
+    const pool = auto.randomPool.filter(r => { const a = getAccount(r.accId); return a && a.connected; });
+    if (pool.length) {
+      const item = pool[Math.floor(Math.random() * pool.length)];
+      const acc = getAccount(item.accId);
+      sendMessage(acc, item.text);
+      addLog(`🎲 Рандом → @${acc.username}: "${item.text.slice(0,40)}"`, 'ok');
+    }
+    scheduleRandom();
+  }, delayMs);
+}
+
+// ── REACT ──
+function addReactRule() {
+  const accId = document.getElementById('reactAcc').value;
+  const reply = document.getElementById('reactMsg').value.trim();
+  if (!accId) { toast('Выбери аккаунт','error'); return; }
+  if (!reply) { toast('Введи фразу','error'); return; }
+  auto.reactRules.push({ id: uid(), accId, reply });
+  document.getElementById('reactMsg').value = '';
+  renderReactRules();
+}
+
+function renderReactRules() {
+  const el = document.getElementById('reactRules');
+  if (!el) return;
+  if (!auto.reactRules.length) { el.innerHTML = '<div style="font-size:12px;color:var(--text3)">Нет фраз.</div>'; return; }
+  el.innerHTML = '';
+  auto.reactRules.forEach(r => {
+    const acc = getAccount(r.accId);
+    const div = document.createElement('div');
+    div.style.cssText = 'display:flex;align-items:center;gap:8px;background:var(--bg4);border-radius:6px;padding:6px 10px;font-size:12px';
+    div.innerHTML = `
+      <span style="color:${acc?acc.color:'var(--text3)'};font-weight:700">@${acc?acc.username:'???'}</span>
+      <span style="flex:1">${escapeHtml(r.reply)}</span>
+      <button class="btn btn-red btn-xs" onclick="removeReactRule('${r.id}')">✕</button>`;
+    el.appendChild(div);
+  });
+}
+
+function removeReactRule(id) { auto.reactRules = auto.reactRules.filter(r => r.id !== id); renderReactRules(); }
+
+function startReact() {
+  if (!auto.reactRules.length) { toast('Добавь фразы реакции','error'); return; }
+  auto.reactActive = true;
+  document.getElementById('reactStartBtn').style.display = 'none';
+  document.getElementById('reactStopBtn').style.display = '';
+  toast('Авто-реакции включены', 'success');
+}
+function stopReact() {
+  auto.reactActive = false;
+  document.getElementById('reactStartBtn').style.display = '';
+  document.getElementById('reactStopBtn').style.display = 'none';
+}
+
+function checkReact(msg) {
+  if (!auto.reactActive || !auto.reactRules.length) return;
+  const chance = parseInt(document.getElementById('reactChance').value) || 30;
+  if (Math.random() * 100 > chance) return;
+  // Не реагируем на своих
+  const ownNames = state.accounts.map(a => a.username.toLowerCase());
+  if (ownNames.includes(msg.username.toLowerCase())) return;
+  // Выбираем случайное правило
+  const rule = auto.reactRules[Math.floor(Math.random() * auto.reactRules.length)];
+  const acc = getAccount(rule.accId);
+  if (!acc || !acc.connected) return;
+  const delay = (parseInt(document.getElementById('reactDelay').value) || 4) * 1000;
+  const reply = rule.reply.replace('{user}', msg.displayName || msg.username).replace('{msg}', msg.text);
+  setTimeout(() => {
+    if (auto.reactActive && acc.connected) {
+      sendMessage(acc, reply);
+      addLog(`👁 Реакция на ${msg.username} → @${acc.username}: "${reply.slice(0,40)}"`, 'ok');
+    }
+  }, delay + Math.random() * 2000);
+}
+
+// Helper для прерываемого sleep
+function sleepAbortable(ms, shouldAbort) {
+  return new Promise(resolve => {
+    const step = 100;
+    let elapsed = 0;
+    const iv = setInterval(() => {
+      elapsed += step;
+      if (elapsed >= ms || shouldAbort()) { clearInterval(iv); resolve(); }
+    }, step);
+  });
 }
 
 renderAll();
