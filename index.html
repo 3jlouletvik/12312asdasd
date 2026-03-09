@@ -493,6 +493,7 @@
 const state = {
   accounts: [],
   channel: '',
+  broadcasterId: null,  // room-id из IRC ROOMSTATE
   messages: [],
   selectedSendAccounts: new Set(),
   broadcastSelected: new Set(),
@@ -661,6 +662,14 @@ function parseIRCLine(acc, line) {
   if (line.includes('001') && line.toLowerCase().includes(acc.username)) {
     addLog(`@${acc.username} авторизован`, 'ok');
   }
+  // ROOMSTATE содержит room-id — сохраняем broadcaster_id бесплатно
+  if (line.includes('ROOMSTATE')) {
+    const m = line.match(/room-id=(\d+)/);
+    if (m) {
+      state.broadcasterId = m[1];
+      addLog(`room-id канала: ${m[1]}`, 'info');
+    }
+  }
   // JOIN — канал может быть офлайн, IRC всё равно работает
   if (line.includes('JOIN') && line.toLowerCase().includes(acc.username.toLowerCase())) {
     if (!acc.connected) {
@@ -668,6 +677,13 @@ function parseIRCLine(acc, line) {
       addLog(`@${acc.username} вошёл в #${acc.channel}`, 'ok');
       renderSidebar(); updateStatus(); renderPerAccountTab();
       addSystemMsg(`@${acc.username} подключился`);
+    }
+  }
+  // USERSTATE содержит наш user-id через tags — нет, но можно взять из глобального GLOBALUSERSTATE
+  if (line.includes('GLOBALUSERSTATE') || line.includes('USERSTATE')) {
+    const m = line.match(/user-id=(\d+)/);
+    if (m && acc) {
+      acc.userId = m[1];
     }
   }
   // 366 = End of NAMES — запасной сигнал что мы в канале
@@ -748,6 +764,7 @@ function connectAllToChannel() {
   if (!raw) { toast('Укажи канал','error'); return; }
   const ch = parseChannel(raw);
   state.channel = ch;
+  state.broadcasterId = null; // сбрасываем при смене канала
   document.getElementById('channelInput').value = ch;
   if (state.accounts.length === 0) { toast('Сначала добавь аккаунты','error'); return; }
   state.accounts.forEach(acc => connectAccount(acc, ch));
@@ -1429,34 +1446,44 @@ async function followChannel(accId) {
 
   acc.followStatus = 'following';
   renderSidebar();
-  addLog(`@${acc.username} → получаем ID канала #${state.channel}...`, 'info');
 
   try {
     const cleanToken = acc.token.replace('oauth:', '');
-    // Шаг 1: broadcaster_id по логину канала
-    const brRes = await fetch(`https://api.twitch.tv/helix/users?login=${state.channel}`, {
-      headers: { 'Authorization': `Bearer ${cleanToken}`, 'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko' }
-    });
-    const brData = await brRes.json();
-    const broadcasterId = brData.data?.[0]?.id;
-    if (!broadcasterId) throw new Error('Канал не найден на Twitch');
 
-    // Шаг 2: наш user_id
-    const meRes = await fetch(`https://api.twitch.tv/helix/users`, {
-      headers: { 'Authorization': `Bearer ${cleanToken}`, 'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko' }
-    });
-    const meData = await meRes.json();
-    const userId = meData.data?.[0]?.id;
-    if (!userId) throw new Error('Не удалось получить ID аккаунта — токен может быть устаревшим');
+    // broadcaster_id — берём из IRC ROOMSTATE если есть, иначе запрашиваем
+    let broadcasterId = state.broadcasterId;
+    if (!broadcasterId) {
+      addLog(`@${acc.username} → запрашиваем ID канала через API...`, 'info');
+      const r = await fetch(`https://api.twitch.tv/helix/users?login=${encodeURIComponent(state.channel)}`, {
+        headers: { 'Authorization': `Bearer ${cleanToken}`, 'Client-Id': 'gp762nuuoqcoxypju8c569th9wz7q5' }
+      });
+      const d = await r.json();
+      broadcasterId = d.data?.[0]?.id;
+      if (!broadcasterId) throw new Error(`Канал "${state.channel}" не найден`);
+      state.broadcasterId = broadcasterId;
+    }
 
-    addLog(`@${acc.username} user_id=${userId} → broadcaster_id=${broadcasterId}`, 'info');
+    // user_id нашего аккаунта — из кэша IRC или через API
+    let userId = acc.userId;
+    if (!userId) {
+      addLog(`@${acc.username} → запрашиваем user_id...`, 'info');
+      const r = await fetch(`https://api.twitch.tv/helix/users`, {
+        headers: { 'Authorization': `Bearer ${cleanToken}`, 'Client-Id': 'gp762nuuoqcoxypju8c569th9wz7q5' }
+      });
+      const d = await r.json();
+      userId = d.data?.[0]?.id;
+      if (!userId) throw new Error('Не удалось получить user_id — проверь токен');
+      acc.userId = userId;
+    }
 
-    // Шаг 3: POST follow
+    addLog(`@${acc.username} follow: user_id=${userId} → broadcaster_id=${broadcasterId}`, 'info');
+
+    // POST /helix/channels/followed
     const followRes = await fetch(`https://api.twitch.tv/helix/channels/followed`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${cleanToken}`,
-        'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+        'Client-Id': 'gp762nuuoqcoxypju8c569th9wz7q5',
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ broadcaster_id: broadcasterId, user_id: userId })
@@ -1467,15 +1494,16 @@ async function followChannel(accId) {
       addLog(`@${acc.username} ✅ зафолловил #${state.channel}`, 'ok');
       toast(`@${acc.username} зафолловил #${state.channel}!`, 'success');
     } else {
-      const errData = await followRes.json().catch(() => ({ message: `HTTP ${followRes.status}` }));
-      // 401 = токен не имеет scope user:write:follows
-      if (followRes.status === 401) throw new Error('Токен не имеет прав на фолловинг. Нужен scope user:write:follows — получи новый токен на twitchapps.com/tmi');
+      const errData = await followRes.json().catch(() => ({}));
+      if (followRes.status === 401) {
+        throw new Error('Нет прав. Нужен токен со scope "user:write:follows". Получи на: id.twitch.tv/oauth2/authorize?client_id=gp762nuuoqcoxypju8c569th9wz7q5&redirect_uri=https://twitchapps.com/tmi/&response_type=token&scope=chat:read+chat:edit+user:write:follows');
+      }
       throw new Error(errData.message || `HTTP ${followRes.status}`);
     }
   } catch(e) {
     acc.followStatus = 'error';
     addLog(`@${acc.username} ошибка фолловинга: ${e.message}`, 'err');
-    toast(`@${acc.username}: ${e.message}`, 'error', 8000);
+    toast(`@${acc.username}: ${e.message.slice(0,120)}`, 'error', 8000);
   }
 
   renderSidebar();
