@@ -485,6 +485,10 @@ function doConnect(acc) {
   ws.onmessage = (e) => {
     const lines = e.data.trim().split('\r\n');
     lines.forEach(line => {
+      // Логируем всё кроме шумных NAMES/353
+      if (!line.includes(' 353 ') && !line.includes(' 366 ')) {
+        addLog(`← ${line.slice(0, 120)}`, 'info');
+      }
       if (line.startsWith('PING')) { ws.send('PONG :tmi.twitch.tv'); return; }
       if (line.startsWith('PONG')) return;
       parseIRCLine(acc, line);
@@ -563,6 +567,14 @@ function parseIRCLine(acc, line) {
     toast(`@${acc.username}: ошибка авторизации. Проверь токен.`, 'error', 6000);
     renderSidebar(); updateStatus();
   }
+  // Показываем ВСЕ NOTICE — они содержат причины почему сообщение не отправилось
+  if (line.includes('NOTICE') && !line.includes('Login authentication failed') && !line.includes('Improperly formatted')) {
+    const noticeMatch = line.match(/NOTICE \S+ :(.+)/);
+    if (noticeMatch) {
+      addLog(`@${acc.username} NOTICE: ${noticeMatch[1]}`, 'err');
+      toast(`@${acc.username}: ${noticeMatch[1]}`, 'error', 6000);
+    }
+  }
 }
 
 function parsePrivMsg(line) {
@@ -584,7 +596,9 @@ function sendMessage(acc, text) {
   if (acc.ws.readyState !== WebSocket.OPEN) { toast(`@${acc.username} соединение нестабильно, подожди...`, 'error'); return false; }
   if (!text.trim()) return false;
   try {
-    acc.ws.send(`PRIVMSG #${acc.channel} :${text}`);
+    const msg = `PRIVMSG #${acc.channel} :${text}`;
+    addLog(`@${acc.username} отправка: ${msg}`, 'info');
+    acc.ws.send(msg);
     // Twitch не возвращает эхо отправителю — добавляем локально
     acc.msgCount++;
     addChatMessage({
