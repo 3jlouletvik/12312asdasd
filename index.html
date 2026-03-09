@@ -206,6 +206,7 @@
     <label>КАНАЛ:</label>
     <input class="channel-input" id="channelInput" type="text" placeholder="twitch.tv/channel или channel">
     <button class="btn btn-purple" onclick="connectAllToChannel()">Подключить всех</button>
+    <button class="btn btn-outline" onclick="followAllAccounts()" title="Зафолловить канал со всех аккаунтов">♥ Фолловить всех</button>
   </div>
   <div class="header-actions">
     <div class="status-badge">
@@ -541,11 +542,12 @@ function addAccount() {
   if (!username) { toast('Введи username','error'); return; }
   if (!token || !token.startsWith('oauth:')) { toast('Токен должен начинаться с oauth:','error'); return; }
   if (state.accounts.find(a => a.username === username)) { toast('Аккаунт уже добавлен','error'); return; }
-  const acc = { id: uid(), username, token, color, ws: null, connected: false, channel: '', msgCount: 0 };
+  const acc = { id: uid(), username, token, color, ws: null, connected: false, channel: '', msgCount: 0, followStatus: 'idle' };
   state.accounts.push(acc);
   document.getElementById('newUsername').value = '';
   document.getElementById('newToken').value = '';
   renderAll();
+  saveAccounts();
   toast(`@${username} добавлен`, 'success');
   addLog(`Аккаунт @${username} добавлен`, 'info');
 }
@@ -558,6 +560,7 @@ function removeAccount(id) {
   state.selectedSendAccounts.delete(id);
   state.broadcastSelected.delete(id);
   renderAll();
+  saveAccounts();
   toast(`@${acc.username} удалён`, 'info');
 }
 
@@ -748,6 +751,7 @@ function connectAllToChannel() {
   document.getElementById('channelInput').value = ch;
   if (state.accounts.length === 0) { toast('Сначала добавь аккаунты','error'); return; }
   state.accounts.forEach(acc => connectAccount(acc, ch));
+  saveAccounts();
   toast(`Подключаем к #${ch}...`, 'info');
 }
 
@@ -849,6 +853,9 @@ function renderSidebar() {
   state.accounts.forEach(acc => {
     const card = document.createElement('div');
     card.className = 'account-card';
+    const followStatus = acc.followStatus || 'idle'; // idle | following | followed | error
+    const followLabel = {idle:'♥ Фолловить', following:'...', followed:'✓ Фолловит', error:'✗ Ошибка'}[followStatus];
+    const followClass = {idle:'btn-outline', following:'btn-outline', followed:'btn-green', error:'btn-red'}[followStatus];
     card.innerHTML = `
       <div class="account-header">
         <div class="account-avatar ${acc.connected?'online':'offline'}" style="background:${acc.color}22;color:${acc.color}">${getInitials(acc.username)}</div>
@@ -862,6 +869,7 @@ function renderSidebar() {
           ? `<button class="btn btn-green btn-xs" onclick="connectSingle('${acc.id}')">Подключить</button>`
           : `<button class="btn btn-outline btn-xs" onclick="disconnectSingle('${acc.id}')">Отключить</button>`
         }
+        <button class="btn ${followClass} btn-xs" id="follow-btn-${acc.id}" onclick="followChannel('${acc.id}')" ${followStatus==='following'?'disabled':''} title="Зафолловить канал ${state.channel||'(укажи канал)'} с этого аккаунта">${followLabel}</button>
         <button class="btn btn-red btn-xs" onclick="removeAccount('${acc.id}')">Удалить</button>
       </div>`;
     list.appendChild(card);
@@ -1411,6 +1419,120 @@ function sleepAbortable(ms, shouldAbort) {
   });
 }
 
+// ══════════════════════════════════════════
+// FOLLOW API
+// ══════════════════════════════════════════
+async function followChannel(accId) {
+  const acc = getAccount(accId);
+  if (!acc) return;
+  if (!state.channel) { toast('Сначала укажи канал вверху', 'error'); return; }
+
+  acc.followStatus = 'following';
+  renderSidebar();
+  addLog(`@${acc.username} → получаем ID канала #${state.channel}...`, 'info');
+
+  try {
+    const cleanToken = acc.token.replace('oauth:', '');
+    // Шаг 1: broadcaster_id по логину канала
+    const brRes = await fetch(`https://api.twitch.tv/helix/users?login=${state.channel}`, {
+      headers: { 'Authorization': `Bearer ${cleanToken}`, 'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko' }
+    });
+    const brData = await brRes.json();
+    const broadcasterId = brData.data?.[0]?.id;
+    if (!broadcasterId) throw new Error('Канал не найден на Twitch');
+
+    // Шаг 2: наш user_id
+    const meRes = await fetch(`https://api.twitch.tv/helix/users`, {
+      headers: { 'Authorization': `Bearer ${cleanToken}`, 'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko' }
+    });
+    const meData = await meRes.json();
+    const userId = meData.data?.[0]?.id;
+    if (!userId) throw new Error('Не удалось получить ID аккаунта — токен может быть устаревшим');
+
+    addLog(`@${acc.username} user_id=${userId} → broadcaster_id=${broadcasterId}`, 'info');
+
+    // Шаг 3: POST follow
+    const followRes = await fetch(`https://api.twitch.tv/helix/channels/followed`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${cleanToken}`,
+        'Client-Id': 'kimne78kx3ncx6brgo4mv6wki5h1ko',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ broadcaster_id: broadcasterId, user_id: userId })
+    });
+
+    if (followRes.status === 204 || followRes.status === 200) {
+      acc.followStatus = 'followed';
+      addLog(`@${acc.username} ✅ зафолловил #${state.channel}`, 'ok');
+      toast(`@${acc.username} зафолловил #${state.channel}!`, 'success');
+    } else {
+      const errData = await followRes.json().catch(() => ({ message: `HTTP ${followRes.status}` }));
+      // 401 = токен не имеет scope user:write:follows
+      if (followRes.status === 401) throw new Error('Токен не имеет прав на фолловинг. Нужен scope user:write:follows — получи новый токен на twitchapps.com/tmi');
+      throw new Error(errData.message || `HTTP ${followRes.status}`);
+    }
+  } catch(e) {
+    acc.followStatus = 'error';
+    addLog(`@${acc.username} ошибка фолловинга: ${e.message}`, 'err');
+    toast(`@${acc.username}: ${e.message}`, 'error', 8000);
+  }
+
+  renderSidebar();
+  saveAccounts();
+}
+
+async function followAllAccounts() {
+  if (!state.channel) { toast('Сначала укажи канал', 'error'); return; }
+  const targets = state.accounts.filter(a => a.followStatus !== 'followed');
+  if (!targets.length) { toast('Все аккаунты уже фолловят канал', 'info'); return; }
+  toast(`Фолловим #${state.channel} с ${targets.length} аккаунтов...`, 'info');
+  for (const acc of targets) {
+    await followChannel(acc.id);
+    await sleep(1500);
+  }
+}
+
+// ══════════════════════════════════════════
+// LOCALSTORAGE
+// ══════════════════════════════════════════
+const STORAGE_KEY = 'twitchMultiChat_v2';
+const CHANNEL_KEY = 'twitchMultiChat_channel';
+
+function saveAccounts() {
+  try {
+    const data = state.accounts.map(a => ({
+      id: a.id, username: a.username, token: a.token,
+      color: a.color, followStatus: a.followStatus || 'idle'
+    }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    localStorage.setItem(CHANNEL_KEY, state.channel || '');
+  } catch(e) { console.warn('localStorage save error:', e); }
+}
+
+function loadAccounts() {
+  try {
+    const ch = localStorage.getItem(CHANNEL_KEY);
+    if (ch) { state.channel = ch; document.getElementById('channelInput').value = ch; }
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    data.forEach(a => {
+      if (!a.username || !a.token) return;
+      state.accounts.push({
+        id: a.id || uid(), username: a.username, token: a.token,
+        color: a.color || '#9147ff', followStatus: a.followStatus || 'idle',
+        ws: null, connected: false, channel: '', msgCount: 0
+      });
+    });
+    if (state.accounts.length) {
+      addLog(`Загружено ${state.accounts.length} аккаунтов из памяти`, 'ok');
+    }
+  } catch(e) { console.warn('localStorage load error:', e); }
+}
+
+// INIT
+loadAccounts();
 renderAll();
 </script>
 </body>
