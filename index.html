@@ -1439,10 +1439,20 @@ function sleepAbortable(ms, shouldAbort) {
 // ══════════════════════════════════════════
 // FOLLOW API
 // ══════════════════════════════════════════
+// Используем Kraken v5 API — работает с OAuth токеном без Client-Id
+// PUT /kraken/users/<user_id>/follows/channels/<channel_id>
+
 async function followChannel(accId) {
   const acc = getAccount(accId);
   if (!acc) return;
   if (!state.channel) { toast('Сначала укажи канал вверху', 'error'); return; }
+
+  // Проверяем что broadcaster_id уже получен из IRC (ROOMSTATE)
+  if (!state.broadcasterId) {
+    toast('Подключись к каналу сначала — нужен room-id из IRC', 'error');
+    addLog('Нет broadcaster_id. Нажми "Подключить всех" и дождись подключения.', 'err');
+    return;
+  }
 
   acc.followStatus = 'following';
   renderSidebar();
@@ -1450,60 +1460,50 @@ async function followChannel(accId) {
   try {
     const cleanToken = acc.token.replace('oauth:', '');
 
-    // broadcaster_id — берём из IRC ROOMSTATE если есть, иначе запрашиваем
-    let broadcasterId = state.broadcasterId;
-    if (!broadcasterId) {
-      addLog(`@${acc.username} → запрашиваем ID канала через API...`, 'info');
-      const r = await fetch(`https://api.twitch.tv/helix/users?login=${encodeURIComponent(state.channel)}`, {
-        headers: { 'Authorization': `Bearer ${cleanToken}`, 'Client-Id': 'gp762nuuoqcoxypju8c569th9wz7q5' }
-      });
-      const d = await r.json();
-      broadcasterId = d.data?.[0]?.id;
-      if (!broadcasterId) throw new Error(`Канал "${state.channel}" не найден`);
-      state.broadcasterId = broadcasterId;
-    }
-
-    // user_id нашего аккаунта — из кэша IRC или через API
+    // Шаг 1: получить user_id нашего аккаунта через Kraken (не требует Client-Id)
     let userId = acc.userId;
     if (!userId) {
-      addLog(`@${acc.username} → запрашиваем user_id...`, 'info');
-      const r = await fetch(`https://api.twitch.tv/helix/users`, {
-        headers: { 'Authorization': `Bearer ${cleanToken}`, 'Client-Id': 'gp762nuuoqcoxypju8c569th9wz7q5' }
+      addLog(`@${acc.username} → получаем user_id через Kraken...`, 'info');
+      const r = await fetch('https://api.twitch.tv/kraken/user', {
+        headers: {
+          'Authorization': `OAuth ${cleanToken}`,
+          'Accept': 'application/vnd.twitchtv.v5+json'
+        }
       });
+      if (!r.ok) {
+        const e = await r.json().catch(()=>({}));
+        throw new Error(e.message || `Kraken /user: HTTP ${r.status}`);
+      }
       const d = await r.json();
-      userId = d.data?.[0]?.id;
-      if (!userId) throw new Error('Не удалось получить user_id — проверь токен');
+      userId = d._id?.toString();
+      if (!userId) throw new Error('Не удалось получить user_id из токена');
       acc.userId = userId;
+      addLog(`@${acc.username} user_id=${userId}`, 'info');
     }
 
-    addLog(`@${acc.username} follow: user_id=${userId} → broadcaster_id=${broadcasterId}`, 'info');
-
-    // POST /helix/channels/followed
-    const followRes = await fetch(`https://api.twitch.tv/helix/channels/followed`, {
-      method: 'POST',
+    // Шаг 2: PUT follow через Kraken
+    addLog(`@${acc.username} → PUT follow user=${userId} → channel=${state.broadcasterId}`, 'info');
+    const followRes = await fetch(`https://api.twitch.tv/kraken/users/${userId}/follows/channels/${state.broadcasterId}`, {
+      method: 'PUT',
       headers: {
-        'Authorization': `Bearer ${cleanToken}`,
-        'Client-Id': 'gp762nuuoqcoxypju8c569th9wz7q5',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ broadcaster_id: broadcasterId, user_id: userId })
+        'Authorization': `OAuth ${cleanToken}`,
+        'Accept': 'application/vnd.twitchtv.v5+json'
+      }
     });
 
-    if (followRes.status === 204 || followRes.status === 200) {
+    if (followRes.status === 200 || followRes.status === 204) {
       acc.followStatus = 'followed';
       addLog(`@${acc.username} ✅ зафолловил #${state.channel}`, 'ok');
       toast(`@${acc.username} зафолловил #${state.channel}!`, 'success');
     } else {
       const errData = await followRes.json().catch(() => ({}));
-      if (followRes.status === 401) {
-        throw new Error('Нет прав. Нужен токен со scope "user:write:follows". Получи на: id.twitch.tv/oauth2/authorize?client_id=gp762nuuoqcoxypju8c569th9wz7q5&redirect_uri=https://twitchapps.com/tmi/&response_type=token&scope=chat:read+chat:edit+user:write:follows');
-      }
       throw new Error(errData.message || `HTTP ${followRes.status}`);
     }
+
   } catch(e) {
     acc.followStatus = 'error';
     addLog(`@${acc.username} ошибка фолловинга: ${e.message}`, 'err');
-    toast(`@${acc.username}: ${e.message.slice(0,120)}`, 'error', 8000);
+    toast(`@${acc.username}: ${e.message}`, 'error', 8000);
   }
 
   renderSidebar();
@@ -1512,12 +1512,13 @@ async function followChannel(accId) {
 
 async function followAllAccounts() {
   if (!state.channel) { toast('Сначала укажи канал', 'error'); return; }
+  if (!state.broadcasterId) { toast('Сначала подключись к каналу (нужен room-id)', 'error'); return; }
   const targets = state.accounts.filter(a => a.followStatus !== 'followed');
   if (!targets.length) { toast('Все аккаунты уже фолловят канал', 'info'); return; }
   toast(`Фолловим #${state.channel} с ${targets.length} аккаунтов...`, 'info');
   for (const acc of targets) {
     await followChannel(acc.id);
-    await sleep(1500);
+    await sleep(2000);
   }
 }
 
