@@ -265,6 +265,16 @@
         </div>
         <button class="btn btn-outline btn-sm" style="width:100%" onclick="saveClientId()">Сохранить Client-ID</button>
       </div>
+      <!-- ЭКСПОРТ / ИМПОРТ -->
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border)">
+        <div class="form-title">💾 Резервная копия</div>
+        <div style="font-size:11px;color:var(--text3);margin-bottom:8px;line-height:1.6">Сохрани все аккаунты и настройки в файл — чтобы не вводить заново после обновления панели</div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-outline btn-sm" style="flex:1" onclick="exportSettings()">⬇ Экспорт</button>
+          <button class="btn btn-outline btn-sm" style="flex:1" onclick="document.getElementById('importFile').click()">⬆ Импорт</button>
+          <input type="file" id="importFile" accept=".json" style="display:none" onchange="importSettings(this)">
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1720,6 +1730,95 @@ async function followAllAccounts() {
 const STORAGE_KEY = 'twitchMultiChat_v2';
 const CHANNEL_KEY = 'twitchMultiChat_channel';
 
+function exportSettings() {
+  try {
+    const data = {
+      version: 2,
+      exported: new Date().toISOString(),
+      accounts: state.accounts.map(a => ({
+        id: a.id, username: a.username, token: a.token,
+        color: a.color, followStatus: a.followStatus || 'idle'
+      })),
+      channel: state.channel || '',
+      clientId: localStorage.getItem('twitchClientId') || '',
+      aiBotGeminiKey: localStorage.getItem('aiBotGeminiKey') || '',
+      aiBotModel:     localStorage.getItem('aiBotModel') || '',
+      aiBotNick:      localStorage.getItem('aiBotNick') || '',
+      aiBotPrompt:    localStorage.getItem('aiBotPrompt') || '',
+      aiBotAccId:     localStorage.getItem('aiBotAccId') || '',
+      aiBotMemory:    localStorage.getItem('aiBotMemory') || '',
+      aiBotDelay:     localStorage.getItem('aiBotDelay') || '',
+      aiBotInitiative:localStorage.getItem('aiBotInitiative') || '',
+      aiBotLongMemory:localStorage.getItem('aiBotLongMemory') || '',
+      aiBotStreamerPatterns: localStorage.getItem('aiBotStreamerPatterns') || '',
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `twitch-panel-backup-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('Настройки экспортированы', 'success');
+  } catch(e) {
+    toast('Ошибка экспорта: ' + e.message, 'error');
+  }
+}
+
+function importSettings(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (!data.version || !Array.isArray(data.accounts)) {
+        toast('Неверный формат файла', 'error'); return;
+      }
+      // Аккаунты
+      state.accounts = [];
+      data.accounts.forEach(a => {
+        if (!a.username || !a.token) return;
+        state.accounts.push({
+          id: a.id || uid(), username: a.username, token: a.token,
+          color: a.color || '#9147ff', followStatus: a.followStatus || 'idle',
+          ws: null, connected: false, channel: '', msgCount: 0
+        });
+      });
+      // Канал
+      if (data.channel) {
+        state.channel = data.channel;
+        document.getElementById('channelInput').value = data.channel;
+      }
+      // Все настройки в localStorage
+      const keys = ['clientId','aiBotGeminiKey','aiBotModel','aiBotNick','aiBotPrompt',
+                    'aiBotAccId','aiBotMemory','aiBotDelay','aiBotInitiative',
+                    'aiBotLongMemory','aiBotStreamerPatterns'];
+      const lsMap = {
+        clientId: 'twitchClientId',
+        aiBotGeminiKey: 'aiBotGeminiKey', aiBotModel: 'aiBotModel',
+        aiBotNick: 'aiBotNick', aiBotPrompt: 'aiBotPrompt',
+        aiBotAccId: 'aiBotAccId', aiBotMemory: 'aiBotMemory',
+        aiBotDelay: 'aiBotDelay', aiBotInitiative: 'aiBotInitiative',
+        aiBotLongMemory: 'aiBotLongMemory', aiBotStreamerPatterns: 'aiBotStreamerPatterns',
+      };
+      keys.forEach(k => { if (data[k]) localStorage.setItem(lsMap[k], data[k]); });
+
+      saveAccounts();
+      loadLongMemory();
+      loadStreamerPatterns();
+      renderAll();
+      loadAiBotSettings();
+      toast(`Импортировано: ${state.accounts.length} аккаунтов`, 'success');
+      addLog(`Импорт: загружено ${state.accounts.length} аккаунтов`, 'ok');
+    } catch(err) {
+      toast('Ошибка при импорте: ' + err.message, 'error');
+    }
+    input.value = '';
+  };
+  reader.readAsText(file);
+}
+
 function saveAccounts() {
   try {
     const data = state.accounts.map(a => ({
@@ -1759,12 +1858,15 @@ const aiBot = {
   active: false,
   screenshotBase64: null,
   screenshotMime: null,
-  chatHistory: [],        // краткосрочная память текущей сессии
-  emotion: 'neutral',     // текущее эмоциональное состояние
-  emotionIntensity: 0,    // 0-10 накопленная интенсивность
-  lastSpoke: 0,           // timestamp последнего сообщения бота
-  initiativeTimer: null,  // таймер для самостоятельных реплик
-  longMemory: [],         // долгосрочные факты между сессиями
+  chatHistory: [],
+  emotion: 'neutral',
+  emotionIntensity: 0,
+  lastSpoke: 0,
+  initiativeTimer: null,
+  longMemory: [],
+  lastStreamerSpeech: null,
+  streamerPatterns: [],    // любимые слова/фразы стримера
+  streamerSpeechLog: [],   // накопленная речь для анализа
 };
 
 // Эмоциональные состояния и их влияние
@@ -2176,42 +2278,45 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
   const recentMsgs = state.messages.slice(-memoryCount);
   const chatText = recentMsgs.map(m => `${m.displayName||m.username}: ${m.text}`).join('\n');
 
-  // Определяем контекст происходящего из чата
   const gameCtx = detectGameContext(recentMsgs);
 
-  // Речь стримера
-  const speechCtx = aiBot.lastStreamerSpeech
-    ? `\n[СТРИМЕР ТОЛЬКО ЧТО СКАЗАЛ ВСЛУХ: "${aiBot.lastStreamerSpeech}"]`
-    : '';
+  // Объединяем визуальный + голосовой контекст в одно
+  const contextParts = [];
+  if (aiBot.lastStreamerSpeech) contextParts.push(`стример только что сказал: "${aiBot.lastStreamerSpeech}"`);
+  if (aiBot.screenshotBase64) contextParts.push('на скриншоте виден текущий экран стрима — используй его чтобы понять что происходит, в какой момент игры, что на экране');
+  const liveCtx = contextParts.length ? `\n[КОНТЕКСТ ПРЯМО СЕЙЧАС: ${contextParts.join('; ')}]` : '';
 
-  // Скриншот даёт визуальный контекст — указываем боту что смотреть
-  const screenshotInstruction = aiBot.screenshotBase64
-    ? '\n[На скриншоте виден текущий момент стрима. Используй это чтобы понять что происходит в игре, какой момент, что на экране.]'
+  // Паттерны речи стримера для обучения
+  const streamerStyle = aiBot.streamerPatterns?.length
+    ? `\nСТИЛЬ СТРИМЕРА (как он обычно говорит): ${aiBot.streamerPatterns.slice(-5).join(', ')}`
     : '';
 
   const hardRules = `
 
 СТИЛЬ — ты живой человек в Twitch чате:
-- Пиши как реальный зритель. Никакого ИИ-стиля, никакой вежливой нейтральности.
-- 1-2 предложения обычно. Иногда одно слово или восклицание.
-- Строчные буквы как в чате. Заглавные только для акцента.
-- Знаки препинания по-человечески: где хочешь ставь, где не хочешь не ставь. Без тире.
-- Иногда опечатка, сокращение, "ну", "лол", "блин", "ааа" — это нормально.
-- Никогда не поучай, не комментируй активность чата.
-- Реагируй конкретно на то что происходит, не абстрактно.`;
+- Пиши как реальный зритель. Никакого ИИ-стиля.
+- 1-2 предложения. Иногда одно слово.
+- Строчные буквы. Заглавные только для акцента.
+- Знаки препинания по-человечески — не в конце каждой фразы. Без тире.
+- Иногда "ну", "лол", "блин", "хм", "ааа" — это норм.
+- НИКАКИХ смайликов и эмодзи вообще. Ни одного.
+- Не поучай, не комментируй активность чата.
+- Реагируй конкретно на происходящее.`;
 
-  const systemPrompt = basePrompt + longMemStr + `\nТВОЁ НАСТРОЕНИЕ: ${emotionInfo.label}.` + (gameCtx ? `\nКОНТЕКСТ ИГРЫ: ${gameCtx}` : '') + screenshotInstruction + hardRules;
+  const systemPrompt = basePrompt + longMemStr + streamerStyle
+    + `\nНАСТРОЕНИЕ: ${emotionInfo.label}.`
+    + (gameCtx ? `\nИГРА: ${gameCtx}` : '')
+    + hardRules;
 
-  // Формируем запрос по типу триггера
   let requestText = '';
   if (triggerType === 'mention') {
-    requestText = `Последние сообщения чата:\n${chatText}${speechCtx}\n\n${triggerMsg.displayName||triggerMsg.username} написал тебе: "${triggerMsg.text}"\n\nОтветь естественно:`;
+    requestText = `Чат:\n${chatText}${liveCtx}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nОтветь:`;
   } else if (triggerType === 'viewer_react') {
-    requestText = `Последние сообщения чата:\n${chatText}${speechCtx}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nЕсли есть что сказать — напиши коротко. Если нечего — ответь только точкой:`;
+    requestText = `Чат:\n${chatText}${liveCtx}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nКороткая реакция или точка если нечего:`;
   } else if (triggerType === 'initiative') {
-    requestText = `Последние сообщения чата:\n${chatText}${speechCtx}\n\nТы давно молчал. Напиши что-нибудь живое по ситуации, одну фразу:`;
+    requestText = `Чат:\n${chatText}${liveCtx}\n\nНапиши одну живую реплику по ситуации:`;
   } else if (triggerType === 'audio') {
-    requestText = `Последние сообщения чата:\n${chatText}\n\nСтример позвал тебя голосом и сказал: "${triggerMsg.text}"${speechCtx}\n\nОтветь как будто только что это услышал, живо и коротко:`;
+    requestText = `Чат:\n${chatText}${liveCtx}\n\nСтример позвал тебя и сказал: "${triggerMsg.text}"\n\nОтветь:`;
   }
 
   const userParts = [];
@@ -2281,8 +2386,13 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
     let reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
     if (!reply) throw new Error('Пустой ответ');
 
-    // Убираем тире
-    reply = reply.replace(/[—–]/g, '').replace(/(?<!\w)-(?!\w)/g, '').replace(/\s{2,}/g, ' ').trim();
+    // Убираем тире и эмодзи — принудительно, независимо от промпта
+    reply = reply
+      .replace(/[—–]/g, '')
+      .replace(/(?<!\w)-(?!\w)/g, '')
+      .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE00}-\u{FEFF}]/gu, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
 
     // Промолчать если viewer_react вернул точку
     if (reply === '.' || reply === '') {
@@ -2465,6 +2575,10 @@ async function processAudioChunk(mimeType) {
 
 function handleTranscript(transcript) {
   aiBot.lastStreamerSpeech = transcript;
+
+  // Учимся на речи стримера — копим фразы и анализируем паттерны
+  learnFromStreamer(transcript);
+
   if (!aiBot.active) return;
 
   const nick = (document.getElementById('aiBotNick')?.value || localStorage.getItem('aiBotNick') || '').trim().toLowerCase();
@@ -2490,6 +2604,80 @@ function handleTranscript(transcript) {
   }, 800 + Math.random() * 1200);
 }
 
+// ── ОБУЧЕНИЕ НА РЕЧИ СТРИМЕРА ──
+function learnFromStreamer(text) {
+  if (!text || text.length < 5) return;
+
+  aiBot.streamerSpeechLog.push(text);
+  if (aiBot.streamerSpeechLog.length > 200) aiBot.streamerSpeechLog.shift();
+
+  // Извлекаем характерные слова и фразы стримера
+  // Ищем слова которые повторяются часто — это его "фишки"
+  const allText = aiBot.streamerSpeechLog.join(' ').toLowerCase();
+  const words = allText.match(/\b[а-яёa-z]{3,}\b/gi) || [];
+  const freq = {};
+  words.forEach(w => { freq[w] = (freq[w] || 0) + 1; });
+
+  // Стоп-слова — игнорируем обычные слова
+  const stopWords = new Set(['это','что','как','все','так','еще','уже','да','нет','ну','вот','там','тут','очень','просто','даже','если','тоже','потому','когда','where','this','that','have','with','они','его','его','для','при','без','под']);
+
+  // Берём топ-10 характерных слов стримера
+  const patterns = Object.entries(freq)
+    .filter(([w, c]) => c >= 3 && !stopWords.has(w) && w.length > 3)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([w]) => w);
+
+  if (patterns.length) {
+    aiBot.streamerPatterns = patterns;
+    // Сохраняем
+    try { localStorage.setItem('aiBotStreamerPatterns', JSON.stringify(patterns)); } catch(e) {}
+  }
+
+  // Каждые 50 фраз — запускаем глубокий анализ через Gemini
+  if (aiBot.streamerSpeechLog.length % 50 === 0) {
+    analyzeStreamerStyle();
+  }
+}
+
+async function analyzeStreamerStyle() {
+  const key = localStorage.getItem('aiBotGeminiKey');
+  if (!key || aiBot.streamerSpeechLog.length < 20) return;
+
+  const sample = aiBot.streamerSpeechLog.slice(-40).join('\n');
+  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text:
+            `Вот фразы которые произнёс стример во время стрима:\n${sample}\n\nОпиши в 2-3 коротких пунктах: его манеру речи, характерные словечки, эмоциональный стиль. Только факты, коротко.`
+          }]}],
+          generationConfig: { maxOutputTokens: 120, temperature: 0.3 }
+        })
+      }
+    );
+    const data = await res.json();
+    const analysis = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (analysis) {
+      aiBot.longMemory.push(`[стиль стримера]: ${analysis}`);
+      saveLongMemory();
+      aiBotLog(`Изучил стиль стримера: ${analysis.slice(0,60)}...`, 'ok');
+    }
+  } catch(e) {}
+}
+
+function loadStreamerPatterns() {
+  try {
+    const p = localStorage.getItem('aiBotStreamerPatterns');
+    if (p) aiBot.streamerPatterns = JSON.parse(p);
+  } catch(e) {}
+}
+
 function stopAudioCapture() {
   _audioLoopActive = false;
   if (_audioRecorder?.state === 'recording') { try { _audioRecorder.stop(); } catch(e) {} }
@@ -2506,6 +2694,7 @@ function stopAudioCapture() {
 loadClientId();
 loadAiBotSettings();
 loadLongMemory();
+loadStreamerPatterns();
 renderAll();
 </script>
 </body>
