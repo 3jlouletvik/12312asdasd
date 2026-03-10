@@ -574,7 +574,7 @@
                 <button class="btn btn-red btn-sm" id="screenStopBtn" onclick="stopScreenCapture()" style="display:none">⏹ Остановить</button>
                 <div style="display:flex;align-items:center;gap:6px">
                   <label style="font-size:11px;color:var(--text3)">Каждые</label>
-                  <input type="number" class="delay-input" id="screenshotInterval" value="30" min="5" max="300" style="width:50px">
+                  <input type="number" class="delay-input" id="screenshotInterval" value="15" min="5" max="300" style="width:50px">
                   <label style="font-size:11px;color:var(--text3)">сек</label>
                 </div>
               </div>
@@ -2162,61 +2162,66 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
 
   const basePrompt = document.getElementById('aiBotPrompt')?.value.trim()
     || localStorage.getItem('aiBotPrompt')
-    || 'Ты дружелюбный зритель стрима. Отвечай коротко, на русском.';
+    || 'Ты живой зритель стрима. Отвечай коротко, на русском.';
 
   const memoryCount = parseInt(document.getElementById('aiBotMemory')?.value || localStorage.getItem('aiBotMemory') || '30');
   const emotionInfo = EMOTIONS[aiBot.emotion] || EMOTIONS.neutral;
 
-  const longMemoryStr = aiBot.longMemory.length
-    ? `\nЧТО ТЫ УЖЕ ЗНАЕШЬ:\n${aiBot.longMemory.slice(-15).join('\n')}\n`
+  // Долгосрочная память
+  const longMemStr = aiBot.longMemory.length
+    ? `\nИЗ ПРОШЛЫХ СТРИМОВ ТЫ ПОМНИШЬ:\n${aiBot.longMemory.slice(-12).join('\n')}\n`
     : '';
 
-  const emotionStr = `\nНАСТРОЕНИЕ: ${emotionInfo.label}.`;
+  // Контекст игры — анализируем последние сообщения чата на тему игры
+  const recentMsgs = state.messages.slice(-memoryCount);
+  const chatText = recentMsgs.map(m => `${m.displayName||m.username}: ${m.text}`).join('\n');
 
-  // Правила живого человека
+  // Определяем контекст происходящего из чата
+  const gameCtx = detectGameContext(recentMsgs);
+
+  // Речь стримера
+  const speechCtx = aiBot.lastStreamerSpeech
+    ? `\n[СТРИМЕР ТОЛЬКО ЧТО СКАЗАЛ ВСЛУХ: "${aiBot.lastStreamerSpeech}"]`
+    : '';
+
+  // Скриншот даёт визуальный контекст — указываем боту что смотреть
+  const screenshotInstruction = aiBot.screenshotBase64
+    ? '\n[На скриншоте виден текущий момент стрима. Используй это чтобы понять что происходит в игре, какой момент, что на экране.]'
+    : '';
+
   const hardRules = `
 
-СТИЛЬ (строго):
-- Пиши как человек в интернете, не как ИИ. Никакой вежливой нейтральности.
-- 1-3 коротких предложения. Иногда одно слово или восклицание если так естественнее.
-- Знаки препинания используй по-человечески: где-то поставь запятую, где-то не ставь, иногда многоточие, иногда вообще без знаков. Не надо ставить знак в конце каждой фразы.
-- Никаких тире и дефисов вообще.
-- Пиши строчными буквами как в обычном чате. Заглавные только если реально хочешь выделить.
-- Можешь иногда написать с опечаткой или сократить слово как в переписке (ну, ааа, лол, хм, ок).
-- Не начинай с обращения по имени.
-- Никогда не поучай, не комментируй активность чата, не говори про спам.`;
+СТИЛЬ — ты живой человек в Twitch чате:
+- Пиши как реальный зритель. Никакого ИИ-стиля, никакой вежливой нейтральности.
+- 1-2 предложения обычно. Иногда одно слово или восклицание.
+- Строчные буквы как в чате. Заглавные только для акцента.
+- Знаки препинания по-человечески: где хочешь ставь, где не хочешь не ставь. Без тире.
+- Иногда опечатка, сокращение, "ну", "лол", "блин", "ааа" — это нормально.
+- Никогда не поучай, не комментируй активность чата.
+- Реагируй конкретно на то что происходит, не абстрактно.`;
 
-  const systemPrompt = basePrompt + longMemoryStr + emotionStr + hardRules;
+  const systemPrompt = basePrompt + longMemStr + `\nТВОЁ НАСТРОЕНИЕ: ${emotionInfo.label}.` + (gameCtx ? `\nКОНТЕКСТ ИГРЫ: ${gameCtx}` : '') + screenshotInstruction + hardRules;
 
-  const recentMsgs = state.messages.slice(-memoryCount)
-    .map(m => `${m.displayName||m.username}: ${m.text}`)
-    .join('\n');
-
-  // Если есть свежая речь стримера — добавляем в контекст
-  const speechCtx = aiBot.lastStreamerSpeech
-    ? `\n[Стример только что сказал вслух: "${aiBot.lastStreamerSpeech}"]`
-    : '';
-
+  // Формируем запрос по типу триггера
   let requestText = '';
   if (triggerType === 'mention') {
-    requestText = `Чат:\n${recentMsgs}${speechCtx}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nОтветь коротко, без тире:`;
+    requestText = `Последние сообщения чата:\n${chatText}${speechCtx}\n\n${triggerMsg.displayName||triggerMsg.username} написал тебе: "${triggerMsg.text}"\n\nОтветь естественно:`;
   } else if (triggerType === 'viewer_react') {
-    requestText = `Чат:\n${recentMsgs}${speechCtx}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nКороткая реакция. Если нечего сказать — напиши только точку:`;
+    requestText = `Последние сообщения чата:\n${chatText}${speechCtx}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nЕсли есть что сказать — напиши коротко. Если нечего — ответь только точкой:`;
   } else if (triggerType === 'initiative') {
-    requestText = `Чат:\n${recentMsgs}${speechCtx}\n\nНапиши короткую реплику по ситуации от себя:`;
+    requestText = `Последние сообщения чата:\n${chatText}${speechCtx}\n\nТы давно молчал. Напиши что-нибудь живое по ситуации, одну фразу:`;
   } else if (triggerType === 'audio') {
-    requestText = `Чат:\n${recentMsgs}${speechCtx}\n\nСтример позвал тебя голосом и сказал: "${triggerMsg.text}"\n\nОтветь как будто услышал его, коротко и по делу:`;
+    requestText = `Последние сообщения чата:\n${chatText}\n\nСтример позвал тебя голосом и сказал: "${triggerMsg.text}"${speechCtx}\n\nОтветь как будто только что это услышал, живо и коротко:`;
   }
 
   const userParts = [];
   if (aiBot.screenshotBase64) {
     userParts.push({ inlineData: { mimeType: aiBot.screenshotMime, data: aiBot.screenshotBase64 } });
-    userParts.push({ text: '[Скриншот стрима]' });
   }
   userParts.push({ text: requestText });
 
   aiBot.chatHistory.push({ role: 'user', parts: userParts });
-  if (aiBot.chatHistory.length > 20) aiBot.chatHistory = aiBot.chatHistory.slice(-20);
+  if (aiBot.chatHistory.length > 16) aiBot.chatHistory = aiBot.chatHistory.slice(-16);
 
   aiBotLog('Запрос к Gemini...', 'info');
 
@@ -2233,7 +2238,7 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
         body: JSON.stringify({
           system_instruction: { parts: [{ text: systemPrompt }] },
           contents: aiBot.chatHistory,
-          generationConfig: { maxOutputTokens: 60, temperature: emotionInfo.temp }
+          generationConfig: { maxOutputTokens: 80, temperature: emotionInfo.temp }
         })
       }
     );
@@ -2244,36 +2249,30 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
     let reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
     if (!reply) throw new Error('Пустой ответ');
 
-    // Постобработка — убираем только тире (всё остальное оставляем как есть)
-    reply = reply
-      .replace(/[—–]/g, '')        // em dash, en dash
-      .replace(/(?<!\w)-(?!\w)/g, '') // одиночный дефис не внутри слова
-      .replace(/\s{2,}/g, ' ')
-      .trim();
+    // Убираем тире
+    reply = reply.replace(/[—–]/g, '').replace(/(?<!\w)-(?!\w)/g, '').replace(/\s{2,}/g, ' ').trim();
 
-    // Если бот решил промолчать (viewer_react вернул ".")
+    // Промолчать если viewer_react вернул точку
     if (reply === '.' || reply === '') {
-      aiBotLog('Бот решил промолчать', 'info');
+      aiBotLog('Решил промолчать', 'info');
       aiBot.chatHistory.pop();
       return;
     }
 
-    // Берём только первое предложение если вышло несколько
-    const firstSentence = reply.split(/[.!?]\s+/)[0];
-    const finalReply = firstSentence.length > 10 ? firstSentence : reply;
-
-    aiBot.chatHistory.push({ role: 'model', parts: [{ text: finalReply }] });
+    aiBot.chatHistory.push({ role: 'model', parts: [{ text: reply }] });
     aiBot.lastSpoke = Date.now();
+    // Сбрасываем речь стримера после использования
+    if (triggerType !== 'audio') aiBot.lastStreamerSpeech = null;
 
-    aiBotLog(`💬 "${finalReply}"`, 'ai');
+    aiBotLog(`💬 "${reply}"`, 'ai');
 
     if (botAcc.connected) {
       if (triggerMsg?.msgId && triggerType === 'mention') {
-        sendReply(botAcc, finalReply, triggerMsg.msgId);
+        sendReply(botAcc, reply, triggerMsg.msgId);
       } else {
-        sendMessage(botAcc, finalReply);
+        sendMessage(botAcc, reply);
       }
-      aiBotLog(`✅ Отправлено`, 'ok');
+      aiBotLog('✅ Отправлено', 'ok');
     } else {
       aiBotLog(`❌ @${botAcc.username} не подключён`, 'err');
     }
@@ -2282,6 +2281,36 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
     aiBotLog(`Ошибка: ${e.message}`, 'err');
     aiBot.chatHistory.pop();
   }
+}
+
+// Анализ контекста игры из чата
+function detectGameContext(msgs) {
+  const text = msgs.map(m => m.text).join(' ').toLowerCase();
+  const hints = [];
+
+  // Определяем игры по ключевым словам
+  const games = {
+    'CS2 / CS:GO': /cs2|csgo|ct|terrorist|флэш|граната|awp|раунд|bomb|defuse|ace/,
+    'Dota 2': /dota|дота|рошан|courier|ward|gank|tower|ancient|aegis/,
+    'Valorant': /valorant|валорант|agent|spike|killjoy|jett|sage|ult/,
+    'Minecraft': /minecraft|майнкрафт|creeper|крипер|respawn|respawn|алмаз|diamond|cobblestone/,
+    'GTA': /gta|grand theft|полиция|cops|wasted|звезда розыска/,
+    'League of Legends': /лига|league|baron|dragon|nexus|gank|jungle/,
+    'Fortnite': /fortnite|фортнайт|storm|строить|build|victory royale/,
+  };
+  for (const [name, re] of Object.entries(games)) {
+    if (re.test(text)) hints.push(`играет в ${name}`);
+  }
+
+  // Общие игровые события
+  if (/умер|погиб|убили|слился|die|died|respawn/.test(text)) hints.push('персонаж только что умер');
+  if (/выиграл|победа|gg|win|winner|ez/.test(text)) hints.push('только что выиграл');
+  if (/проиграл|поражение|lose|lost/.test(text)) hints.push('только что проиграл');
+  if (/босс|boss/.test(text)) hints.push('сражается с боссом');
+  if (/рейд|raid/.test(text)) hints.push('идёт рейд');
+  if (/топ1|top1|1 остался|soло/.test(text)) hints.push('топ 1, финал');
+
+  return hints.length ? hints.join(', ') : '';
 }
 
 // ── АУДИО ЗАХВАТ ──
@@ -2399,16 +2428,11 @@ async function processAudioChunk(mimeType) {
 
     aiBotLog(`Стример позвал "${nick}" голосом!`, 'ok');
 
-    if (Date.now() - aiBot.lastSpoke < 8000) {
-      aiBotLog('Слишком быстро после прошлого ответа, пропускаю', 'info');
-      return;
-    }
-
     const accId = localStorage.getItem('aiBotAccId');
     const botAcc = getAccount(accId);
     if (botAcc?.connected) {
-      // Небольшая естественная пауза перед ответом
-      await sleep(1500 + Math.random() * 2000);
+      // Естественная пауза — как человек который услышал своё имя
+      await sleep(1000 + Math.random() * 1500);
       await callGemini({ text: transcript, username: 'streamer', displayName: 'стример', msgId: null }, botAcc, 'audio');
     }
   } catch(e) {
