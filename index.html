@@ -520,9 +520,9 @@
             <div class="form-field">
               <label>Модель Gemini</label>
               <select class="queue-select" id="aiBotModel" style="width:100%">
-                <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (стабильная, бесплатно)</option>
-                <option value="gemini-3.1-flash-lite-preview">gemini-3.1-flash-lite-preview (новая)</option>
+                <option value="gemini-3.1-flash-lite-preview">gemini-3.1-flash-lite-preview (дефолт)</option>
                 <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite</option>
                 <option value="gemini-1.5-flash">gemini-1.5-flash</option>
               </select>
             </div>
@@ -563,7 +563,7 @@
             <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:10px">🎭 Личность бота</div>
             <div class="form-field">
               <label>Системный промпт (характер)</label>
-              <textarea id="aiBotPrompt" style="width:100%;background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-family:'Syne',sans-serif;font-size:12px;outline:none;resize:vertical;min-height:120px;line-height:1.6" placeholder="Промпт...">Ты Ария, живой зритель стрима. Давно смотришь этого стримера, знаешь его манеру, иногда подкалываешь. У тебя есть своё мнение и ты его не стесняешься высказывать. Реагируешь на конкретные моменты, не говоришь абстрактно. Не ИИ, не бот, просто человек в чате.</textarea>
+              <textarea id="aiBotPrompt" style="width:100%;background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-family:'Syne',sans-serif;font-size:12px;outline:none;resize:vertical;min-height:120px;line-height:1.6" placeholder="Промпт...">Тебя зовут Светка. Ты давно смотришь этого стримера, знаешь его стиль и игры которые он играет. Говоришь прямо, иногда с иронией. Можешь подколоть но без злобы. Если видишь что он облажался — скажешь. Если сделал что-то крутое — отметишь. Отвечаешь на конкретные вопросы конкретно. В игре разбираешься достаточно чтобы понимать что происходит.</textarea>
             </div>
             <div class="form-field">
               <label>Память разговора (сообщений)</label>
@@ -1872,12 +1872,12 @@ const aiBot = {
 
 // Эмоциональные состояния и их влияние
 const EMOTIONS = {
-  neutral:  { label: '😐 Спокоен',    temp: 0.85 },
-  amused:   { label: '😄 Весело',     temp: 1.0  },
-  excited:  { label: '🔥 Заводится',  temp: 1.1  },
-  bored:    { label: '😴 Скучает',    temp: 0.7  },
-  salty:    { label: '😤 Немного бомбит', temp: 0.95 },
-  hype:     { label: '🚀 Полный хайп', temp: 1.15 },
+  neutral:  { label: 'спокойна',       temp: 1.0  },
+  amused:   { label: 'смеётся',        temp: 1.1  },
+  excited:  { label: 'заводится',      temp: 1.2  },
+  bored:    { label: 'немного скучно', temp: 0.9  },
+  salty:    { label: 'бомбит',         temp: 1.1  },
+  hype:     { label: 'полный хайп',    temp: 1.25 },
 };
 
 function aiBotLog(text, type='info') {
@@ -2324,90 +2324,109 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
 
   const gameCtx = detectGameContext(recentMsgs);
 
-  // Объединяем визуальный + голосовой контекст в одно
-  const contextParts = [];
-  if (aiBot.lastStreamerSpeech) contextParts.push(`стример только что сказал: "${aiBot.lastStreamerSpeech}"`);
-  if (aiBot.screenshotBase64) contextParts.push('на скриншоте виден текущий экран стрима — используй его чтобы понять что происходит, в какой момент игры, что на экране');
-  const liveCtx = contextParts.length ? `\n[КОНТЕКСТ ПРЯМО СЕЙЧАС: ${contextParts.join('; ')}]` : '';
+  // Живой контекст — что происходит прямо сейчас
+  const liveCtxParts = [];
+  if (aiBot.lastStreamerSpeech) liveCtxParts.push(`стример только что сказал вслух: "${aiBot.lastStreamerSpeech}"`);
+  if (aiBot.screenshotBase64) liveCtxParts.push('есть скриншот текущего момента стрима');
+  const liveCtx = liveCtxParts.length ? `\n[СЕЙЧАС: ${liveCtxParts.join('; ')}]` : '';
 
-  // Паттерны речи стримера для обучения
+  // Что ты знаешь о стримере из прошлых сессий
   const streamerStyle = aiBot.streamerPatterns?.length
-    ? `\nСТИЛЬ СТРИМЕРА (как он обычно говорит): ${aiBot.streamerPatterns.slice(-5).join(', ')}`
+    ? `\nСтример часто говорит/делает: ${aiBot.streamerPatterns.slice(-8).join(', ')}.`
     : '';
 
-  const hardRules = `
+  // Последние 5 сообщений как "горячий контекст" — самое важное
+  const hotContext = recentMsgs.slice(-5).map(m => `${m.displayName||m.username}: ${m.text}`).join('\n');
 
-СТИЛЬ — ты живой человек в Twitch чате:
-- Пиши как реальный зритель. Никакого ИИ-стиля.
-- 1-2 предложения. Иногда одно слово.
-- Строчные буквы. Заглавные только для акцента.
-- Знаки препинания по-человечески — не в конце каждой фразы. Без тире.
-- Иногда "ну", "лол", "блин", "хм", "ааа" — это норм.
-- НИКАКИХ смайликов и эмодзи вообще. Ни одного.
-- Не поучай, не комментируй активность чата.
-- Реагируй конкретно на происходящее.`;
+  // Собираем системный промпт — чёткий, конкретный
+  const systemPrompt = `${basePrompt}
 
-  const systemPrompt = basePrompt + longMemStr + streamerStyle
-    + `\nНАСТРОЕНИЕ: ${emotionInfo.label}.`
-    + (gameCtx ? `\nИГРА: ${gameCtx}` : '')
-    + hardRules;
+СЕЙЧАС ТЫ СМОТРИШЬ СТРИМ${gameCtx ? ` (${gameCtx})` : ''}.
+Ты уже давно здесь, видела что происходило. Настроение: ${emotionInfo.label}.
+${longMemStr}${streamerStyle}
 
+ПРАВИЛА ПОВЕДЕНИЯ В ЧАТЕ:
+- Ты человек, не ИИ. Если кто-то спрашивает — ты обычный зритель.
+- Пиши строчными, как в реальном чате. Без тире.
+- 1-2 предложения максимум. Иногда одно слово или короткая реакция.
+- Никаких смайликов и эмодзи.
+- Отвечай на КОНКРЕТНЫЙ вопрос или момент — не абстрактно.
+- Если спрашивают про игру — отвечай исходя из того что видишь на экране и слышишь.
+- Иногда можно ошибиться в слове или написать небрежно — это нормально.
+- Не объясняй очевидное, не поучай, не пиши "хороший вопрос".
+- Если нечего сказать — лучше промолчи (верни точку).`;
+
+  // Формируем запрос с умным контекстом
   let requestText = '';
+  const whoAsked = triggerMsg ? (triggerMsg.displayName || triggerMsg.username) : '';
+
   if (triggerType === 'mention') {
-    requestText = `Чат:\n${chatText}${liveCtx}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nОтветь:`;
+    requestText = `Последние сообщения чата:\n${chatText}${liveCtx}\n\n${whoAsked} обратился к тебе: "${triggerMsg.text}"\n\nТвой ответ (помни — ты живой зритель, отвечай конкретно и коротко):`;
   } else if (triggerType === 'viewer_react') {
-    requestText = `Чат:\n${chatText}${liveCtx}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nКороткая реакция или точка если нечего:`;
+    requestText = `Последние сообщения:\n${hotContext}${liveCtx}\n\n${whoAsked}: "${triggerMsg.text}"\n\nЕсть ли что сказать по этому поводу? Если нет — точка. Если да — одна короткая фраза:`;
   } else if (triggerType === 'initiative') {
-    requestText = `Чат:\n${chatText}${liveCtx}\n\nНапиши одну живую реплику по ситуации:`;
+    requestText = `Последние сообщения:\n${hotContext}${liveCtx}\n\nПосмотри что происходит. Есть ли что-то живое и конкретное сказать? Одна фраза или точка если нечего:`;
   } else if (triggerType === 'audio') {
-    requestText = `Чат:\n${chatText}${liveCtx}\n\nСтример позвал тебя и сказал: "${triggerMsg.text}"\n\nОтветь:`;
+    requestText = `Последние сообщения чата:\n${hotContext}${liveCtx}\n\nСтример сказал тебе: "${triggerMsg.text}"\n\nОтветь ему напрямую, коротко и живо:`;
   }
 
   const userParts = [];
   if (aiBot.screenshotBase64) {
     userParts.push({ inlineData: { mimeType: aiBot.screenshotMime, data: aiBot.screenshotBase64 } });
+    userParts.push({ text: '[Скриншот стрима — используй чтобы понять что происходит в игре]\n' });
   }
   userParts.push({ text: requestText });
 
   aiBot.chatHistory.push({ role: 'user', parts: userParts });
-  if (aiBot.chatHistory.length > 16) aiBot.chatHistory = aiBot.chatHistory.slice(-16);
+  if (aiBot.chatHistory.length > 12) aiBot.chatHistory = aiBot.chatHistory.slice(-12);
 
   aiBotLog('Запрос к Gemini...', 'info');
 
   const primaryModel = document.getElementById('aiBotModel')?.value
     || localStorage.getItem('aiBotModel')
-    || 'gemini-2.0-flash-lite';
+    || 'gemini-3.1-flash-lite-preview';
 
-  // Порядок fallback моделей
   const modelFallback = [
     primaryModel,
-    'gemini-2.0-flash-lite',
-    'gemini-1.5-flash',
+    'gemini-3.1-flash-lite-preview',
     'gemini-2.0-flash',
-  ].filter((m, i, arr) => arr.indexOf(m) === i); // убираем дубли
+    'gemini-2.0-flash-lite',
+  ].filter((m, i, arr) => arr.indexOf(m) === i);
 
   const payload = {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents: aiBot.chatHistory,
-    generationConfig: { maxOutputTokens: 80, temperature: emotionInfo.temp }
+    generationConfig: { maxOutputTokens: 120, temperature: emotionInfo.temp }
   };
 
   let data, lastErr, usedModel;
   for (const model of modelFallback) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
-        const res = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
-        );
+        aiBotLog(`Запрос: ${model} (попытка ${attempt})...`, 'info');
+
+        // Таймаут 12 секунд — если нет ответа, пробуем следующую модель
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
+
+        let res;
+        try {
+          res = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: controller.signal }
+          );
+        } finally {
+          clearTimeout(timeoutId);
+        }
+
         data = await res.json();
         const isOverload = res.status === 503 || res.status === 429
           || data.error?.message?.includes('high demand')
           || data.error?.message?.includes('overloaded')
           || data.error?.message?.includes('quota');
         if (isOverload) {
-          aiBotLog(`${model} перегружена (попытка ${attempt})...`, 'info');
-          await sleep(attempt * 3000);
+          aiBotLog(`${model} перегружена, жду ${attempt * 2}с...`, 'info');
+          await sleep(attempt * 2000);
           continue;
         }
         if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
@@ -2415,12 +2434,16 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
         lastErr = null;
         break;
       } catch(e) {
-        lastErr = e;
-        await sleep(2000);
+        if (e.name === 'AbortError') {
+          aiBotLog(`${model} не ответила за 12с, пробую следующую...`, 'info');
+        } else {
+          lastErr = e;
+          aiBotLog(`${model} ошибка: ${e.message}`, 'info');
+        }
+        await sleep(1000);
       }
     }
     if (usedModel) break;
-    aiBotLog(`${model} недоступна, пробую следующую...`, 'info');
   }
 
   try {
@@ -2474,29 +2497,41 @@ function detectGameContext(msgs) {
   const text = msgs.map(m => m.text).join(' ').toLowerCase();
   const hints = [];
 
-  // Определяем игры по ключевым словам
   const games = {
-    'CS2 / CS:GO': /cs2|csgo|ct|terrorist|флэш|граната|awp|раунд|bomb|defuse|ace/,
-    'Dota 2': /dota|дота|рошан|courier|ward|gank|tower|ancient|aegis/,
-    'Valorant': /valorant|валорант|agent|spike|killjoy|jett|sage|ult/,
-    'Minecraft': /minecraft|майнкрафт|creeper|крипер|respawn|respawn|алмаз|diamond|cobblestone/,
-    'GTA': /gta|grand theft|полиция|cops|wasted|звезда розыска/,
-    'League of Legends': /лига|league|baron|dragon|nexus|gank|jungle/,
-    'Fortnite': /fortnite|фортнайт|storm|строить|build|victory royale/,
+    'CS2': /cs2|csgo|\bct\b|terrorist|флэш|граната|\bawp\b|раунд|bomb|defuse|\bace\b|кейс|скин|ранг/,
+    'Dota 2': /\bdota\b|дота|рошан|courier|ward|gank|tower|ancient|aegis|инво|пудж|аркан/,
+    'Valorant': /valorant|валорант|\bagent\b|spike|killjoy|jett|sage|\bult\b|ваниш|флэш/,
+    'Minecraft': /minecraft|майнкрафт|creeper|крипер|алмаз|diamond|cobblestone|нэзер|ender/,
+    'GTA': /\bgta\b|grand theft|копы|wasted|звезда розыска|миссия|хайст/,
+    'League of Legends': /\blol\b|лига легенд|барон|дракон|nexus|ганк|джунгли|пентакилл/,
+    'Fortnite': /fortnite|фортнайт|шторм|стройка|victory royale|батл пасс/,
+    'Apex Legends': /apex|апекс|legend|legends|wraith|bloodhound|рейтинг|мастер/,
+    'Escape from Tarkov': /tarkov|тарков|рейд|вылазка|схрон|болт|чел/,
+    'World of Warcraft': /\bwow\b|\bwotlk\b|рейд|данж|гилдия|маунт|лут|аукцион/,
+    'Rust': /\brust\b|раст|рейд|дверь|стена|фарм|ферма|вайп/,
+    'PUBG': /\bpubg\b|пубг|зона|курица|прыжок|пан/,
   };
+
   for (const [name, re] of Object.entries(games)) {
-    if (re.test(text)) hints.push(`играет в ${name}`);
+    if (re.test(text)) hints.push(name);
   }
 
-  // Общие игровые события
-  if (/умер|погиб|убили|слился|die|died|respawn/.test(text)) hints.push('персонаж только что умер');
-  if (/выиграл|победа|gg|win|winner|ez/.test(text)) hints.push('только что выиграл');
-  if (/проиграл|поражение|lose|lost/.test(text)) hints.push('только что проиграл');
-  if (/босс|boss/.test(text)) hints.push('сражается с боссом');
-  if (/рейд|raid/.test(text)) hints.push('идёт рейд');
-  if (/топ1|top1|1 остался|soло/.test(text)) hints.push('топ 1, финал');
+  // Игровые события
+  const events = [];
+  if (/умер|погиб|убили|слился|die\b|died|смерть|труп/.test(text)) events.push('смерть');
+  if (/\bgg\b|победа|выиграл|\bez\b|win\b|winner/.test(text)) events.push('победа');
+  if (/проиграл|поражение|lose\b|lost\b|слил/.test(text)) events.push('поражение');
+  if (/босс|boss/.test(text)) events.push('бой с боссом');
+  if (/рейд|raid/.test(text)) events.push('рейд');
+  if (/топ.?1|top.?1|последний|финал/.test(text)) events.push('финал');
+  if (/тилт|tilted|бомбит|злится/.test(text)) events.push('тилт');
+  if (/клатч|clutch/.test(text)) events.push('клатч');
+  if (/фарм|гринд|grind/.test(text)) events.push('гринд');
 
-  return hints.length ? hints.join(', ') : '';
+  let result = '';
+  if (hints.length) result += hints.join('/');
+  if (events.length) result += (result ? ', ' : '') + events.join(', ');
+  return result;
 }
 
 function handleTranscript(transcript) {
