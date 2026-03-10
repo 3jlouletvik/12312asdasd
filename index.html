@@ -553,7 +553,7 @@
             <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:10px">🎭 Личность бота</div>
             <div class="form-field">
               <label>Системный промпт (характер)</label>
-              <textarea id="aiBotPrompt" style="width:100%;background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-family:'Syne',sans-serif;font-size:12px;outline:none;resize:vertical;min-height:120px;line-height:1.6" placeholder="Промпт...">Ты Ария, живой зритель стрима. Давно следишь за стримером, знаешь его стиль. Пишешь разговорно, иногда с юмором, иногда подкалываешь. Реагируешь на конкретные моменты стрима. Не поучаешь, не делаешь замечания. Если нечего сказать по делу, лучше помолчи.</textarea>
+              <textarea id="aiBotPrompt" style="width:100%;background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-family:'Syne',sans-serif;font-size:12px;outline:none;resize:vertical;min-height:120px;line-height:1.6" placeholder="Промпт...">Ты Ария, живой зритель стрима. Давно смотришь этого стримера, знаешь его манеру, иногда подкалываешь. У тебя есть своё мнение и ты его не стесняешься высказывать. Реагируешь на конкретные моменты, не говоришь абстрактно. Не ИИ, не бот, просто человек в чате.</textarea>
             </div>
             <div class="form-field">
               <label>Память разговора (сообщений)</label>
@@ -1852,35 +1852,43 @@ async function extractMemory() {
 }
 
 function saveAiBotSettings() {
-  const key = document.getElementById('geminiKey').value.trim();
-  const nick = document.getElementById('aiBotNick').value.trim();
-  const prompt = document.getElementById('aiBotPrompt').value.trim();
-  const accId = document.getElementById('aiBotAccount').value;
-  const memory = document.getElementById('aiBotMemory').value;
-  const delay = document.getElementById('aiBotDelay').value;
-  const model = document.getElementById('aiBotModel')?.value || '';
-  const initInterval = document.getElementById('aiBotInitiative')?.value || '0';
+  const g = id => document.getElementById(id);
+  const key = g('geminiKey')?.value.trim();
+  const nick = g('aiBotNick')?.value.trim();
+  const prompt = g('aiBotPrompt')?.value.trim();
+  const accId = g('aiBotAccount')?.value;
+  const memory = g('aiBotMemory')?.value;
+  const delay = g('aiBotDelay')?.value;
+  const model = g('aiBotModel')?.value;
+  const initInterval = g('aiBotInitiative')?.value || '0';
   if (key) localStorage.setItem('aiBotGeminiKey', key);
-  localStorage.setItem('aiBotNick', nick);
-  localStorage.setItem('aiBotPrompt', prompt);
-  localStorage.setItem('aiBotAccId', accId);
-  localStorage.setItem('aiBotMemory', memory);
-  localStorage.setItem('aiBotDelay', delay);
+  if (nick !== undefined) localStorage.setItem('aiBotNick', nick);
+  if (prompt) localStorage.setItem('aiBotPrompt', prompt);
+  if (accId !== undefined) localStorage.setItem('aiBotAccId', accId);
+  if (memory) localStorage.setItem('aiBotMemory', memory);
+  if (delay) localStorage.setItem('aiBotDelay', delay);
   if (model) localStorage.setItem('aiBotModel', model);
   localStorage.setItem('aiBotInitiative', initInterval);
   toast('Настройки AI бота сохранены', 'success');
 }
 
 function loadAiBotSettings() {
-  const set = (id, key) => { const v = localStorage.getItem(key); if (v && document.getElementById(id)) document.getElementById(id).value = v; };
-  set('geminiKey', 'aiBotGeminiKey');
-  set('aiBotModel', 'aiBotModel');
-  set('aiBotNick', 'aiBotNick');
-  set('aiBotPrompt', 'aiBotPrompt');
-  set('aiBotAccount', 'aiBotAccId');
-  set('aiBotMemory', 'aiBotMemory');
-  set('aiBotDelay', 'aiBotDelay');
-  set('aiBotInitiative', 'aiBotInitiative');
+  // Ждём пока элементы появятся в DOM (вкладка может быть закрыта)
+  const tryLoad = () => {
+    const g = id => document.getElementById(id);
+    if (!g('geminiKey')) { setTimeout(tryLoad, 100); return; }
+    const sv = (id, key) => { const v = localStorage.getItem(key); if (v !== null && g(id)) g(id).value = v; };
+    sv('geminiKey',      'aiBotGeminiKey');
+    sv('aiBotModel',     'aiBotModel');
+    sv('aiBotNick',      'aiBotNick');
+    sv('aiBotPrompt',    'aiBotPrompt');
+    sv('aiBotAccount',   'aiBotAccId');
+    sv('aiBotMemory',    'aiBotMemory');
+    sv('aiBotDelay',     'aiBotDelay');
+    sv('aiBotInitiative','aiBotInitiative');
+    renderAiBotAccountSelect();
+  };
+  tryLoad();
 }
 
 // ── ЗАХВАТ ЭКРАНА ──
@@ -2165,15 +2173,18 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
 
   const emotionStr = `\nНАСТРОЕНИЕ: ${emotionInfo.label}.`;
 
-  // Жёсткие правила которые всегда добавляются поверх пользовательского промпта
+  // Правила живого человека
   const hardRules = `
 
-ЖЁСТКИЕ ПРАВИЛА:
-- Пиши 1-3 предложения. Не больше трёх. Не меньше одного.
-- Используй ТОЛЬКО запятые из знаков препинания. Никаких точек, восклицательных, вопросительных знаков, тире, дефисов, двоеточий, скобок. Вообще ничего кроме запятых.
-- Не говори про спам, не комментируй активность в чате, не поучай.
-- Не начинай с имени собеседника.
-- Пиши как обычный живой зритель, своими словами.`;
+СТИЛЬ (строго):
+- Пиши как человек в интернете, не как ИИ. Никакой вежливой нейтральности.
+- 1-3 коротких предложения. Иногда одно слово или восклицание если так естественнее.
+- Знаки препинания используй по-человечески: где-то поставь запятую, где-то не ставь, иногда многоточие, иногда вообще без знаков. Не надо ставить знак в конце каждой фразы.
+- Никаких тире и дефисов вообще.
+- Пиши строчными буквами как в обычном чате. Заглавные только если реально хочешь выделить.
+- Можешь иногда написать с опечаткой или сократить слово как в переписке (ну, ааа, лол, хм, ок).
+- Не начинай с обращения по имени.
+- Никогда не поучай, не комментируй активность чата, не говори про спам.`;
 
   const systemPrompt = basePrompt + longMemoryStr + emotionStr + hardRules;
 
@@ -2233,9 +2244,10 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
     let reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
     if (!reply) throw new Error('Пустой ответ');
 
-    // Постобработка — оставляем ТОЛЬКО запятые из знаков препинания
+    // Постобработка — убираем только тире (всё остальное оставляем как есть)
     reply = reply
-      .replace(/[.!?;:()[\]{}"'«»—–\-]/g, '')  // убираем все знаки кроме запятых
+      .replace(/[—–]/g, '')        // em dash, en dash
+      .replace(/(?<!\w)-(?!\w)/g, '') // одиночный дефис не внутри слова
       .replace(/\s{2,}/g, ' ')
       .trim();
 
