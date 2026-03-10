@@ -553,7 +553,7 @@
             <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:10px">🎭 Личность бота</div>
             <div class="form-field">
               <label>Системный промпт (характер)</label>
-              <textarea id="aiBotPrompt" style="width:100%;background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-family:'Syne',sans-serif;font-size:12px;outline:none;resize:vertical;min-height:120px;line-height:1.6" placeholder="Ты — Ария, дружелюбный AI-зритель стрима. Ты живой, с юмором, иногда подкалываешь стримера. Отвечай коротко (1-2 предложения), на русском языке. Не говори что ты ИИ.">Ты — Ария, дружелюбный AI-зритель стрима. Ты живой, с юмором, иногда подкалываешь стримера. Отвечай коротко (1-2 предложения), на русском языке. Не говори что ты ИИ.</textarea>
+              <textarea id="aiBotPrompt" style="width:100%;background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:8px;color:var(--text);font-family:'Syne',sans-serif;font-size:12px;outline:none;resize:vertical;min-height:120px;line-height:1.6" placeholder="Промпт...">Ты Ария, живой зритель стрима. Давно следишь за стримером, знаешь его стиль. Пишешь разговорно, иногда с юмором, иногда подкалываешь. Реагируешь на конкретные моменты стрима. Не поучаешь, не делаешь замечания. Если нечего сказать по делу, лучше помолчи.</textarea>
             </div>
             <div class="form-field">
               <label>Память разговора (сообщений)</label>
@@ -2010,35 +2010,43 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
   const memoryCount = parseInt(document.getElementById('aiBotMemory')?.value || localStorage.getItem('aiBotMemory') || '30');
   const emotionInfo = EMOTIONS[aiBot.emotion] || EMOTIONS.neutral;
 
-  // Собираем долгосрочную память
   const longMemoryStr = aiBot.longMemory.length
-    ? `\nЧТО ТЫ УЖЕ ЗНАЕШЬ (из прошлых сессий):\n${aiBot.longMemory.slice(-15).join('\n')}\n`
+    ? `\nЧТО ТЫ УЖЕ ЗНАЕШЬ:\n${aiBot.longMemory.slice(-15).join('\n')}\n`
     : '';
 
-  // Текущее эмоциональное состояние
-  const emotionStr = `\nТВОЁ ТЕКУЩЕЕ НАСТРОЕНИЕ: ${emotionInfo.label}. Пусть это слегка чувствуется в ответе.`;
+  const emotionStr = `\nНАСТРОЕНИЕ: ${emotionInfo.label}.`;
 
-  const systemPrompt = basePrompt + longMemoryStr + emotionStr;
+  // Жёсткие правила которые всегда добавляются поверх пользовательского промпта
+  const hardRules = `
 
-  // Последние сообщения чата
+ЖЁСТКИЕ ПРАВИЛА (нарушать нельзя):
+- Максимум 1 предложение. Не больше. Никогда.
+- Никаких тире, дефисов, знака — в тексте. Вообще. Ни одного.
+- Не говори про спам, не упоминай что кто-то много пишет, не комментируй активность в чате.
+- Не поучай, не делай замечания, не говори "хватит", "стоп", "успокойся".
+- Не начинай с имени собеседника.
+- Пиши как обычный зритель в чате, не как модератор.
+- Если нечего сказать — лучше промолчи (ответь одним словом или коротким восклицанием).`;
+
+  const systemPrompt = basePrompt + longMemoryStr + emotionStr + hardRules;
+
   const recentMsgs = state.messages.slice(-memoryCount)
     .map(m => `${m.displayName||m.username}: ${m.text}`)
     .join('\n');
 
-  // Формируем текст запроса в зависимости от типа триггера
   let requestText = '';
   if (triggerType === 'mention') {
-    requestText = `Чат:\n${recentMsgs}\n\n@${triggerMsg.displayName||triggerMsg.username} обратился к тебе: "${triggerMsg.text}"\n\nОтветь как живой человек, коротко (1-2 предложения). Не начинай с обращения по имени.`;
+    requestText = `Чат:\n${recentMsgs}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nОдин короткий ответ без тире:`;
   } else if (triggerType === 'viewer_react') {
-    requestText = `Чат:\n${recentMsgs}\n\n@${triggerMsg.displayName||triggerMsg.username} написал: "${triggerMsg.text}"\n\nЕсли есть что сказать по теме — напиши коротко своё мнение или реакцию как зритель. Не обязательно отвечать именно этому человеку.`;
+    requestText = `Чат:\n${recentMsgs}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nКороткая реакция (можно промолчать — тогда напиши только "."  и я не отправлю):`;
   } else if (triggerType === 'initiative') {
-    requestText = `Чат:\n${recentMsgs}\n\nТы давно молчал. Напиши что-нибудь от себя — коротко, по ситуации на стриме. Это должно выглядеть как случайная реплика живого зрителя, не вопрос и не дежурная фраза.`;
+    requestText = `Чат:\n${recentMsgs}\n\nНапиши одну короткую реплику по ситуации. Без тире:`;
   }
 
   const userParts = [];
   if (aiBot.screenshotBase64) {
     userParts.push({ inlineData: { mimeType: aiBot.screenshotMime, data: aiBot.screenshotBase64 } });
-    userParts.push({ text: '[Скриншот стрима прямо сейчас]' });
+    userParts.push({ text: '[Скриншот стрима]' });
   }
   userParts.push({ text: requestText });
 
@@ -2060,7 +2068,7 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
         body: JSON.stringify({
           system_instruction: { parts: [{ text: systemPrompt }] },
           contents: aiBot.chatHistory,
-          generationConfig: { maxOutputTokens: 120, temperature: emotionInfo.temp }
+          generationConfig: { maxOutputTokens: 60, temperature: emotionInfo.temp }
         })
       }
     );
@@ -2068,16 +2076,33 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
 
-    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    let reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
     if (!reply) throw new Error('Пустой ответ');
 
-    aiBot.chatHistory.push({ role: 'model', parts: [{ text: reply }] });
+    // Постобработка — убираем все тире и дефисы жёстко
+    reply = reply
+      .replace(/[—–\-]/g, '')   // убираем em dash, en dash, дефис
+      .replace(/\s{2,}/g, ' ')  // лишние пробелы после удаления
+      .trim();
+
+    // Если бот решил промолчать (viewer_react вернул ".")
+    if (reply === '.' || reply === '') {
+      aiBotLog('Бот решил промолчать', 'info');
+      aiBot.chatHistory.pop();
+      return;
+    }
+
+    // Берём только первое предложение если вышло несколько
+    const firstSentence = reply.split(/[.!?]\s+/)[0];
+    const finalReply = firstSentence.length > 10 ? firstSentence : reply;
+
+    aiBot.chatHistory.push({ role: 'model', parts: [{ text: finalReply }] });
     aiBot.lastSpoke = Date.now();
 
-    aiBotLog(`💬 "${reply.slice(0, 80)}"`, 'ai');
+    aiBotLog(`💬 "${finalReply}"`, 'ai');
 
     if (botAcc.connected) {
-      sendMessage(botAcc, reply);
+      sendMessage(botAcc, finalReply);
       aiBotLog(`✅ Отправлено`, 'ok');
     } else {
       aiBotLog(`❌ @${botAcc.username} не подключён`, 'err');
