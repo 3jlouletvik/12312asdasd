@@ -1868,17 +1868,25 @@ async function startScreenCapture() {
 
     document.getElementById('screenCaptureBtn').style.display = 'none';
     document.getElementById('screenStopBtn').style.display = '';
-    document.getElementById('screenCaptureStatus').textContent = 'Активен, делаю первый скриншот...';
-    document.getElementById('screenCaptureStatus').style.color = 'var(--green)';
+    document.getElementById('screenCaptureStatus').textContent = 'Ожидаю первый кадр...';
+    document.getElementById('screenCaptureStatus').style.color = 'var(--yellow)';
 
-    // Первый скриншот сразу
-    await sleep(500);
+    // Ждём пока видео реально начнёт играть и появятся пиксели
+    await new Promise(resolve => {
+      video.onloadedmetadata = () => video.play().then(resolve).catch(resolve);
+      setTimeout(resolve, 3000); // fallback
+    });
+
+    // Дополнительно ждём пока кадр не будет реально не чёрным
+    await waitForRealFrame(video);
+
     captureFrame();
 
-    // Запускаем таймер
     const interval = parseInt(document.getElementById('screenshotInterval').value || '30') * 1000;
     _screenCaptureTimer = setInterval(captureFrame, interval);
 
+    document.getElementById('screenCaptureStatus').textContent = `Активен, каждые ${interval/1000}с`;
+    document.getElementById('screenCaptureStatus').style.color = 'var(--green)';
     aiBotLog(`Захват экрана запущен, каждые ${interval/1000}с`, 'ok');
   } catch(e) {
     if (e.name !== 'NotAllowedError') {
@@ -1886,6 +1894,41 @@ async function startScreenCapture() {
       toast('Не удалось захватить экран', 'error');
     }
   }
+}
+
+// Ждём пока кадр реально не будет чёрным (проверяем яркость)
+function waitForRealFrame(video, maxAttempts = 20) {
+  return new Promise(resolve => {
+    let attempts = 0;
+    const canvas = document.getElementById('screenshotCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const check = () => {
+      attempts++;
+      const w = video.videoWidth || 1280;
+      const h = video.videoHeight || 720;
+      canvas.width = w;
+      canvas.height = h;
+      ctx.drawImage(video, 0, 0, w, h);
+
+      // Проверяем среднюю яркость центра кадра
+      const sample = ctx.getImageData(w/2 - 50, h/2 - 50, 100, 100);
+      let brightness = 0;
+      for (let i = 0; i < sample.data.length; i += 4) {
+        brightness += sample.data[i] + sample.data[i+1] + sample.data[i+2];
+      }
+      brightness /= (sample.data.length / 4 * 3);
+
+      if (brightness > 5 || attempts >= maxAttempts) {
+        aiBotLog(`Кадр готов (яркость: ${Math.round(brightness)}, попытка ${attempts})`, 'ok');
+        resolve();
+      } else {
+        aiBotLog(`Ждём кадр... яркость ${Math.round(brightness)} (${attempts}/${maxAttempts})`, 'info');
+        setTimeout(check, 300);
+      }
+    };
+    setTimeout(check, 500);
+  });
 }
 
 function captureFrame() {
