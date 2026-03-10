@@ -510,8 +510,8 @@
             <div class="form-field">
               <label>Модель Gemini</label>
               <select class="queue-select" id="aiBotModel" style="width:100%">
-                <option value="gemini-3.1-flash-lite-preview">gemini-3.1-flash-lite-preview (новая, бесплатно)</option>
-                <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (бесплатно)</option>
+                <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (стабильная, бесплатно)</option>
+                <option value="gemini-3.1-flash-lite-preview">gemini-3.1-flash-lite-preview (новая)</option>
                 <option value="gemini-2.0-flash">gemini-2.0-flash</option>
                 <option value="gemini-1.5-flash">gemini-1.5-flash</option>
               </select>
@@ -2225,9 +2225,17 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
 
   aiBotLog('Запрос к Gemini...', 'info');
 
-  const model = document.getElementById('aiBotModel')?.value
+  const primaryModel = document.getElementById('aiBotModel')?.value
     || localStorage.getItem('aiBotModel')
-    || 'gemini-3.1-flash-lite-preview';
+    || 'gemini-2.0-flash-lite';
+
+  // Порядок fallback моделей
+  const modelFallback = [
+    primaryModel,
+    'gemini-2.0-flash-lite',
+    'gemini-1.5-flash',
+    'gemini-2.0-flash',
+  ].filter((m, i, arr) => arr.indexOf(m) === i); // убираем дубли
 
   const payload = {
     system_instruction: { parts: [{ text: systemPrompt }] },
@@ -2235,33 +2243,40 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
     generationConfig: { maxOutputTokens: 80, temperature: emotionInfo.temp }
   };
 
-  // Retry с паузой при перегрузке (503 / "high demand")
-  let data, lastErr;
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
-      );
-      data = await res.json();
-      if (res.status === 503 || data.error?.message?.includes('high demand') || data.error?.message?.includes('overloaded')) {
-        const wait = attempt * 4000;
-        aiBotLog(`Gemini перегружен, жду ${wait/1000}с (попытка ${attempt}/3)...`, 'info');
-        await sleep(wait);
-        continue;
+  let data, lastErr, usedModel;
+  for (const model of modelFallback) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }
+        );
+        data = await res.json();
+        const isOverload = res.status === 503 || res.status === 429
+          || data.error?.message?.includes('high demand')
+          || data.error?.message?.includes('overloaded')
+          || data.error?.message?.includes('quota');
+        if (isOverload) {
+          aiBotLog(`${model} перегружена (попытка ${attempt})...`, 'info');
+          await sleep(attempt * 3000);
+          continue;
+        }
+        if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+        usedModel = model;
+        lastErr = null;
+        break;
+      } catch(e) {
+        lastErr = e;
+        await sleep(2000);
       }
-      if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
-      lastErr = null;
-      break;
-    } catch(e) {
-      lastErr = e;
-      if (attempt < 3) { await sleep(attempt * 3000); continue; }
     }
+    if (usedModel) break;
+    aiBotLog(`${model} недоступна, пробую следующую...`, 'info');
   }
 
   try {
-    if (lastErr) throw lastErr;
-    if (!data || data.error) throw new Error(data?.error?.message || 'Нет ответа после 3 попыток');
+    if (!usedModel) throw new Error(lastErr?.message || 'Все модели недоступны');
+    if (!data || data.error) throw new Error(data?.error?.message || 'Нет ответа');
 
     let reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
     if (!reply) throw new Error('Пустой ответ');
@@ -2330,118 +2345,134 @@ function detectGameContext(msgs) {
   return hints.length ? hints.join(', ') : '';
 }
 
-// ── АУДИО — Web Speech API + захват вкладки ──
+// ── АУДИО — захват вкладки + Gemini транскрипция ──
 let _audioStream = null;
-let _speechRecognition = null;
+let _audioRecorder = null;
 let _audioContext = null;
+let _audioChunks = [];
+let _audioLoopActive = false;
 
 async function startAudioCapture() {
-  // Проверяем поддержку Web Speech API
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    toast('Браузер не поддерживает Web Speech API. Используй Chrome.', 'error', 6000);
-    return;
-  }
+  const key = document.getElementById('geminiKey')?.value.trim() || localStorage.getItem('aiBotGeminiKey');
+  if (!key) { toast('Сначала введи Gemini API Key', 'error'); return; }
 
   try {
-    // Захватываем вкладку браузера (аудио + видео опционально)
-    // Пользователь выбирает вкладку со стримом
+    // Захватываем вкладку — пользователь выбирает вкладку со стримом
     const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: true,   // нужен для выбора вкладки
-      audio: {
-        suppressLocalAudioPlayback: false,
-        noiseSuppression: false,
-        echoCancellation: false,
-      }
+      video: { width: 1, height: 1 }, // минимальное видео чтобы был выбор вкладки
+      audio: { noiseSuppression: false, echoCancellation: false, sampleRate: 16000 }
     });
 
-    _audioStream = stream;
-
-    // Проверяем что аудио трек есть
     const audioTracks = stream.getAudioTracks();
     if (!audioTracks.length) {
       stream.getTracks().forEach(t => t.stop());
-      toast('Аудио не получено. При выборе вкладки отметь "Поделиться звуком вкладки"', 'error', 7000);
-      aiBotLog('Нет аудио трека — нужно включить "Поделиться звуком" при захвате', 'err');
+      toast('Нет звука! При выборе вкладки поставь галочку "Поделиться звуком вкладки"', 'error', 8000);
+      aiBotLog('❌ Аудио трек не получен. Нужна галочка "Поделиться звуком" в диалоге Chrome', 'err');
       return;
     }
 
-    // Подключаем аудио трек к Web Speech API через AudioContext
-    _audioContext = new AudioContext();
-    const source = _audioContext.createMediaStreamSource(new MediaStream(audioTracks));
-    const dest = _audioContext.createMediaStreamDestination();
-    source.connect(dest);
-
-    // Запускаем распознавание речи
-    _speechRecognition = new SpeechRecognition();
-    _speechRecognition.continuous = true;
-    _speechRecognition.interimResults = false;
-    _speechRecognition.lang = 'ru-RU'; // Русский язык
-    _speechRecognition.maxAlternatives = 1;
-
-    _speechRecognition.onresult = (event) => {
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (!event.results[i].isFinal) continue;
-        const transcript = event.results[i][0].transcript.trim();
-        if (!transcript) continue;
-        handleTranscript(transcript);
-      }
-    };
-
-    _speechRecognition.onerror = (e) => {
-      if (e.error === 'no-speech') return; // тишина — норм
-      aiBotLog(`Speech API ошибка: ${e.error}`, 'err');
-    };
-
-    _speechRecognition.onend = () => {
-      // Автоперезапуск если не остановлено вручную
-      if (_audioStream) {
-        try { _speechRecognition.start(); } catch(e) {}
-      }
-    };
-
-    // Подаём захваченный аудио поток в Speech Recognition
-    // Chrome умеет читать с любого MediaStream
-    _speechRecognition.stream = dest.stream;
-    _speechRecognition.start();
-
-    // Видеотрек не нужен для аудио — останавливаем чтобы не мешал захвату экрана
+    // Видео не нужно
     stream.getVideoTracks().forEach(t => t.stop());
 
-    stream.getAudioTracks()[0].addEventListener('ended', stopAudioCapture);
+    _audioStream = new MediaStream(audioTracks);
+    _audioLoopActive = true;
+    audioTracks[0].addEventListener('ended', stopAudioCapture);
 
     document.getElementById('audioStartBtn').style.display = 'none';
     document.getElementById('audioStopBtn').style.display = '';
-    document.getElementById('audioStatus').textContent = `✅ Слушаю стример (${audioTracks[0].label})`;
+    document.getElementById('audioStatus').textContent = `✅ Слушаю: ${audioTracks[0].label || 'вкладку'}`;
     document.getElementById('audioStatus').style.color = 'var(--green)';
     document.getElementById('audioTranscript').style.display = '';
-    document.getElementById('audioTranscript').textContent = 'Жду речи стримера...';
-    aiBotLog(`Аудио захват запущен: ${audioTracks[0].label}`, 'ok');
+    document.getElementById('audioTranscript').textContent = 'Слушаю...';
+    aiBotLog('🎙 Аудио захват запущен', 'ok');
+
+    // Запускаем цикл записи чанками по 5 секунд
+    audioRecordLoop();
 
   } catch(e) {
     if (e.name === 'NotAllowedError') return;
     aiBotLog(`Ошибка аудио: ${e.message}`, 'err');
-    toast('Ошибка захвата аудио: ' + e.message, 'error', 6000);
+    toast('Ошибка: ' + e.message, 'error');
+  }
+}
+
+function audioRecordLoop() {
+  if (!_audioStream || !_audioLoopActive) return;
+
+  _audioChunks = [];
+  const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : 'audio/webm';
+
+  try {
+    _audioRecorder = new MediaRecorder(_audioStream, { mimeType });
+    _audioRecorder.ondataavailable = e => { if (e.data?.size > 0) _audioChunks.push(e.data); };
+    _audioRecorder.onstop = async () => {
+      if (_audioChunks.length) await processAudioChunk(mimeType);
+      if (_audioLoopActive) audioRecordLoop(); // следующий чанк
+    };
+    _audioRecorder.start();
+    setTimeout(() => {
+      if (_audioRecorder?.state === 'recording') _audioRecorder.stop();
+    }, 5000); // чанки по 5 сек
+  } catch(e) {
+    aiBotLog(`Ошибка записи: ${e.message}`, 'err');
+  }
+}
+
+async function processAudioChunk(mimeType) {
+  if (!_audioChunks.length) return;
+  const key = document.getElementById('geminiKey')?.value.trim() || localStorage.getItem('aiBotGeminiKey');
+  if (!key) return;
+
+  const blob = new Blob(_audioChunks, { type: mimeType });
+  if (blob.size < 2000) return; // тишина
+
+  const b64 = await new Promise(res => {
+    const r = new FileReader();
+    r.onload = () => res(r.result.split(',')[1]);
+    r.readAsDataURL(blob);
+  });
+
+  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [
+            { inlineData: { mimeType, data: b64 } },
+            { text: 'Транскрибируй речь из аудио. Только текст что сказано, без пояснений. Если тишина/музыка/нет речи — ответь одним словом: тишина' }
+          ]}],
+          generationConfig: { maxOutputTokens: 150, temperature: 0.1 }
+        })
+      }
+    );
+    const data = await res.json();
+    const transcript = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (!transcript || /^тишина$/i.test(transcript)) return;
+
+    document.getElementById('audioTranscript').textContent = `"${transcript}"`;
+    aiBotLog(`🗣 "${transcript.slice(0, 80)}"`, 'info');
+    handleTranscript(transcript);
+  } catch(e) {
+    // Тихо игнорируем ошибки транскрипции чтобы не спамить лог
   }
 }
 
 function handleTranscript(transcript) {
-  document.getElementById('audioTranscript').textContent = `"${transcript}"`;
-  aiBotLog(`Стример: "${transcript.slice(0, 70)}"`, 'info');
-
-  // Всегда сохраняем в контекст для ответов бота
   aiBot.lastStreamerSpeech = transcript;
-
   if (!aiBot.active) return;
 
   const nick = (document.getElementById('aiBotNick')?.value || localStorage.getItem('aiBotNick') || '').trim().toLowerCase();
   if (!nick) return;
 
   const tLow = transcript.toLowerCase();
-
-  // Точное совпадение или нечёткое (на случай ошибок распознавания)
   const exactMatch = tLow.includes(nick);
-  const fuzzyMatch = new RegExp(nick.split('').join('.{0,2}'), 'i').test(tLow);
+  const fuzzyMatch = !exactMatch && new RegExp(nick.split('').join('.{0,2}'), 'i').test(tLow);
 
   if (!exactMatch && !fuzzyMatch) return;
 
@@ -2451,20 +2482,19 @@ function handleTranscript(transcript) {
   const botAcc = getAccount(accId);
   if (!botAcc?.connected) return;
 
-  // 100% ответ — без рандома и кулдауна
   setTimeout(async () => {
     await callGemini(
       { text: transcript, username: 'streamer', displayName: 'стример', msgId: null },
-      botAcc,
-      'audio'
+      botAcc, 'audio'
     );
-  }, 1000 + Math.random() * 1500); // небольшая человеческая пауза
+  }, 800 + Math.random() * 1200);
 }
 
 function stopAudioCapture() {
-  if (_speechRecognition) { try { _speechRecognition.stop(); } catch(e) {} _speechRecognition = null; }
-  if (_audioContext) { _audioContext.close(); _audioContext = null; }
+  _audioLoopActive = false;
+  if (_audioRecorder?.state === 'recording') { try { _audioRecorder.stop(); } catch(e) {} }
   if (_audioStream) { _audioStream.getTracks().forEach(t => t.stop()); _audioStream = null; }
+  if (_audioContext) { _audioContext.close(); _audioContext = null; }
   aiBot.lastStreamerSpeech = null;
   document.getElementById('audioStartBtn').style.display = '';
   document.getElementById('audioStopBtn').style.display = 'none';
