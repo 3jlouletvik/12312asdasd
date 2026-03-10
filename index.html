@@ -528,6 +528,14 @@
             </div>
 
             <div class="form-field">
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" id="aiBotWebSearch" style="accent-color:var(--purple);width:14px;height:14px">
+                <span>🌐 Поиск в интернете</span>
+              </label>
+              <div class="form-hint">Бот сможет гуглить актуальную инфу (патчи, новости, игры). Только для gemini-2.0-flash+</div>
+            </div>
+
+            <div class="form-field">
               <label>Gemini API Key</label>
               <input class="form-input" id="geminiKey" type="password" placeholder="AIza...">
               <div class="form-hint">Бесплатно: <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com</a></div>
@@ -621,6 +629,42 @@
           <button class="btn btn-red" id="aiBotStopBtn" onclick="stopAiBot()" style="display:none">⏹ Выключить + сохранить память</button>
           <div id="aiBotStatus" style="font-size:12px;color:var(--text3)">Выключен</div>
           <div id="aiBotEmotionState" style="font-size:13px;margin-left:4px"></div>
+        </div>
+
+        <!-- ПРОВЕРКА ПАМЯТИ -->
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:8px">🔍 Проверка памяти и обучения</div>
+
+          <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+            <!-- Просмотр памяти -->
+            <button class="btn btn-outline btn-sm" onclick="showMemoryInspector()">📋 Показать память</button>
+            <!-- Тест бота -->
+            <button class="btn btn-purple btn-sm" onclick="toggleMemoryTest()">🧪 Тест обучения</button>
+          </div>
+
+          <!-- Инспектор памяти -->
+          <div id="memoryInspector" style="display:none;margin-bottom:10px">
+            <div style="background:var(--bg4);border-radius:8px;padding:10px;max-height:200px;overflow-y:auto">
+              <div id="memoryInspectorContent" style="font-size:11px;color:var(--text2);line-height:1.8;font-family:'JetBrains Mono',monospace"></div>
+            </div>
+            <div style="font-size:10px;color:var(--text3);margin-top:4px" id="memoryStats"></div>
+          </div>
+
+          <!-- Тест: задаёшь вопрос, бот отвечает показывая что из памяти использовал -->
+          <div id="memoryTestPanel" style="display:none">
+            <div style="font-size:11px;color:var(--text3);margin-bottom:8px;line-height:1.6">
+              Задай вопрос боту — увидишь ответ и какие именно данные из памяти он использовал
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:8px">
+              <input class="form-input" id="memTestInput" placeholder="например: как тут общаются? что ты помнишь про стримера?" style="flex:1;font-size:12px" onkeydown="if(event.key==='Enter')runMemoryTest()">
+              <button class="btn btn-purple btn-sm" onclick="runMemoryTest()" id="memTestBtn">Спросить</button>
+            </div>
+            <div id="memTestResult" style="display:none;background:var(--bg4);border-radius:8px;padding:12px;font-size:12px;line-height:1.7">
+              <div id="memTestAnswer" style="color:var(--text);margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border)"></div>
+              <div style="font-size:11px;color:var(--text3);margin-bottom:4px;font-weight:600">Использована память:</div>
+              <div id="memTestUsed" style="font-size:11px;color:var(--text2);font-family:'JetBrains Mono',monospace;line-height:1.8"></div>
+            </div>
+          </div>
         </div>
 
         <!-- ОБУЧЕНИЕ НА ЧУЖОМ ЧАТЕ -->
@@ -2025,6 +2069,7 @@ function saveAiBotSettings() {
   if (delay) localStorage.setItem('aiBotDelay', delay);
   if (model) localStorage.setItem('aiBotModel', model);
   localStorage.setItem('aiBotInitiative', initInterval);
+  localStorage.setItem('aiBotWebSearch', g('aiBotWebSearch')?.checked ? 'true' : 'false');
   toast('Настройки AI бота сохранены', 'success');
 }
 
@@ -2042,6 +2087,8 @@ function loadAiBotSettings() {
     sv('aiBotMemory',    'aiBotMemory');
     sv('aiBotDelay',     'aiBotDelay');
     sv('aiBotInitiative','aiBotInitiative');
+    const ws = localStorage.getItem('aiBotWebSearch');
+    if (ws && g('aiBotWebSearch')) g('aiBotWebSearch').checked = ws === 'true';
     renderAiBotAccountSelect();
   };
   tryLoad();
@@ -2452,10 +2499,14 @@ ${longMemStr}${streamerStyle}${gameNote}
     'gemini-2.0-flash-lite',
   ].filter((m, i, arr) => arr.indexOf(m) === i);
 
+  const useWebSearch = document.getElementById('aiBotWebSearch')?.checked
+    || localStorage.getItem('aiBotWebSearch') === 'true';
+
   const payload = {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents: aiBot.chatHistory,
-    generationConfig: { maxOutputTokens: 120, temperature: emotionInfo.temp }
+    generationConfig: { maxOutputTokens: 120, temperature: emotionInfo.temp },
+    ...(useWebSearch ? { tools: [{ google_search: {} }] } : {})
   };
 
   let data, lastErr, usedModel;
@@ -2696,6 +2747,115 @@ function loadStreamerPatterns() {
     const p = localStorage.getItem('aiBotStreamerPatterns');
     if (p) aiBot.streamerPatterns = JSON.parse(p);
   } catch(e) {}
+}
+
+// ── ИНСПЕКТОР ПАМЯТИ ──
+function showMemoryInspector() {
+  const inspector = document.getElementById('memoryInspector');
+  const content = document.getElementById('memoryInspectorContent');
+  const stats = document.getElementById('memoryStats');
+
+  if (inspector.style.display !== 'none') {
+    inspector.style.display = 'none';
+    return;
+  }
+
+  if (!aiBot.longMemory.length) {
+    content.innerHTML = '<span style="color:var(--text3)">Память пуста. Проведи хотя бы одну сессию или обучи бота на чате.</span>';
+    stats.textContent = '';
+    inspector.style.display = '';
+    return;
+  }
+
+  // Группируем по типу
+  const groups = {
+    '🎓 Обучение на чатах': aiBot.longMemory.filter(m => m.includes('[ОБУЧЕНИЕ') || m.includes('[НАБЛЮДЕНИЕ') || m.includes('[ЧАТ стиль')),
+    '🎮 Стиль стримера': aiBot.longMemory.filter(m => m.includes('[стиль стримера') || m.includes('[СТИЛЬ')),
+    '💬 Сессионная память': aiBot.longMemory.filter(m => !m.includes('[ОБУЧЕНИЕ') && !m.includes('[НАБЛЮДЕНИЕ') && !m.includes('[ЧАТ стиль') && !m.includes('[стиль стримера') && !m.includes('[СТИЛЬ')),
+  };
+
+  let html = '';
+  for (const [label, items] of Object.entries(groups)) {
+    if (!items.length) continue;
+    html += `<div style="color:var(--purple);font-weight:700;margin:6px 0 3px">${label} (${items.length})</div>`;
+    items.forEach(m => {
+      html += `<div style="color:var(--text2);padding:2px 0;border-bottom:1px solid var(--border);word-break:break-word">${escHtml(m)}</div>`;
+    });
+  }
+
+  content.innerHTML = html;
+  stats.textContent = `Всего записей: ${aiBot.longMemory.length}/40`;
+  inspector.style.display = '';
+}
+
+function toggleMemoryTest() {
+  const panel = document.getElementById('memoryTestPanel');
+  panel.style.display = panel.style.display === 'none' ? '' : 'none';
+}
+
+async function runMemoryTest() {
+  const question = document.getElementById('memTestInput').value.trim();
+  if (!question) return;
+  const key = localStorage.getItem('aiBotGeminiKey');
+  if (!key) { toast('Нужен Gemini API Key', 'error'); return; }
+
+  const btn = document.getElementById('memTestBtn');
+  btn.textContent = '...';
+  btn.disabled = true;
+
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
+
+  // Собираем всю память
+  const allMem = aiBot.longMemory.join('\n');
+  const trainMem = aiBot.longMemory.filter(m => m.includes('[ОБУЧЕНИЕ') || m.includes('[НАБЛЮДЕНИЕ') || m.includes('[ЧАТ стиль'));
+  const sessionMem = aiBot.longMemory.filter(m => !trainMem.includes(m));
+
+  const prompt = `Тебе задают вопрос о том что ты знаешь и помнишь.
+
+ВСЯ ТВОЯ ПАМЯТЬ:
+${allMem || '(пусто)'}
+
+ВОПРОС: ${question}
+
+Ответь на два части:
+1. ОТВЕТ: (твой прямой ответ на вопрос)
+2. ИСПОЛЬЗОВАНО ИЗ ПАМЯТИ: (перечисли конкретные записи из памяти которые помогли ответить, или "ничего" если память не помогла)`;
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 400, temperature: 0.2 } })
+      }
+    );
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+    if (text) {
+      const answerMatch = text.match(/ОТВЕТ:\s*([\s\S]*?)(?=ИСПОЛЬЗОВАНО|$)/i);
+      const usedMatch = text.match(/ИСПОЛЬЗОВАНО ИЗ ПАМЯТИ:\s*([\s\S]*)/i);
+
+      document.getElementById('memTestAnswer').textContent = answerMatch?.[1]?.trim() || text;
+      document.getElementById('memTestUsed').textContent = usedMatch?.[1]?.trim() || '—';
+      document.getElementById('memTestResult').style.display = '';
+
+      // Показываем статистику памяти
+      const usedText = usedMatch?.[1] || '';
+      const isMemoryUsed = usedText.toLowerCase() !== 'ничего' && usedText.length > 5;
+      aiBotLog(`Тест памяти: ${isMemoryUsed ? 'память использована' : 'память не помогла'}`, isMemoryUsed ? 'ok' : 'info');
+    }
+  } catch(e) {
+    document.getElementById('memTestAnswer').textContent = 'Ошибка: ' + e.message;
+    document.getElementById('memTestResult').style.display = '';
+  }
+
+  btn.textContent = 'Спросить';
+  btn.disabled = false;
+}
+
+function escHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 // ── ОБУЧЕНИЕ НА ЧУЖОМ ЧАТЕ ──
