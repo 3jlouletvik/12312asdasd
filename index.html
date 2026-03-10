@@ -1959,15 +1959,23 @@ function clearLongMemory() {
   toast('Память бота очищена', 'info');
 }
 
-// После каждой сессии просим Gemini извлечь важные факты
+// После каждой сессии сохраняем полезное в память
 async function extractMemory() {
-  if (aiBot.chatHistory.length < 4) return;
+  if (aiBot.chatHistory.length < 3) return;
   const key = localStorage.getItem('aiBotGeminiKey');
   if (!key) return;
   const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
-  const historyText = aiBot.chatHistory
-    .map(h => `${h.role}: ${h.parts[0]?.text?.slice(0,200) || ''}`)
-    .join('\n');
+
+  // Собираем только текстовые части истории (без скриншотов)
+  const historyText = aiBot.chatHistory.map(h => {
+    const textPart = h.parts.find(p => p.text);
+    return textPart ? `${h.role === 'user' ? 'чат' : 'бот'}: ${textPart.text.slice(0, 300)}` : '';
+  }).filter(Boolean).join('\n');
+
+  // Также добавляем последние сообщения чата для контекста
+  const recentChat = state.messages.slice(-40)
+    .map(m => `${m.displayName||m.username}: ${m.text}`).join('\n');
+
   try {
     const res = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
@@ -1976,22 +1984,27 @@ async function extractMemory() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ role: 'user', parts: [{ text:
-            `Из этого разговора в чате стрима извлеки 2-4 коротких факта которые стоит запомнить на будущее (о стримере, играх, событиях). Формат: одна строка — один факт. Только факты, никаких пояснений.\n\n${historyText}`
+            `Вот что происходило в чате стрима и как бот отвечал:\n\nОТВЕТЫ БОТА:\n${historyText}\n\nЧАТ ЗА СЕССИЮ:\n${recentChat}\n\nВыдели 3-5 коротких пунктов для памяти. Каждый пункт — отдельная строка без нумерации. Запоминай:\n- как зрители общаются с ботом (что спрашивают, как реагируют)\n- кто из зрителей активен и как с ним лучше говорить\n- что понравилось/не понравилось в ответах бота\n- темы которые поднимались в чате\n- что стоит помнить про этот стрим\nТолько конкретные полезные наблюдения. Без воды.`
           }] }],
-          generationConfig: { maxOutputTokens: 150, temperature: 0.3 }
+          generationConfig: { maxOutputTokens: 200, temperature: 0.2 }
         })
       }
     );
     const data = await res.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
     if (text) {
-      const facts = text.split('\n').map(f => f.trim()).filter(f => f.length > 5);
-      const dated = facts.map(f => `[${new Date().toLocaleDateString('ru')}] ${f}`);
+      const date = new Date().toLocaleDateString('ru');
+      const facts = text.split('\n')
+        .map(f => f.replace(/^[-–•*]\s*/, '').trim())
+        .filter(f => f.length > 8 && f.length < 200);
+      const dated = facts.map(f => `[${date}] ${f}`);
       aiBot.longMemory.push(...dated);
+      // Держим не больше 40 записей, убираем старые
+      if (aiBot.longMemory.length > 40) aiBot.longMemory = aiBot.longMemory.slice(-40);
       saveLongMemory();
-      aiBotLog(`Запомнено ${dated.length} фактов в долгосрочную память`, 'ok');
+      aiBotLog(`Память: сохранено ${dated.length} наблюдений`, 'ok');
     }
-  } catch(e) { aiBotLog(`Ошибка сохранения памяти: ${e.message}`, 'err'); }
+  } catch(e) { aiBotLog(`Ошибка памяти: ${e.message}`, 'err'); }
 }
 
 function saveAiBotSettings() {
@@ -2353,69 +2366,75 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
   const memoryCount = parseInt(document.getElementById('aiBotMemory')?.value || localStorage.getItem('aiBotMemory') || '30');
   const emotionInfo = EMOTIONS[aiBot.emotion] || EMOTIONS.neutral;
 
-  // Долгосрочная память
-  const longMemStr = aiBot.longMemory.length
-    ? `\nИЗ ПРОШЛЫХ СТРИМОВ ТЫ ПОМНИШЬ:\n${aiBot.longMemory.slice(-12).join('\n')}\n`
-    : '';
+  // Долгосрочная память — разделяем обучение и сессионные наблюдения
+  let longMemStr = '';
+  if (aiBot.longMemory.length) {
+    const trainMem = aiBot.longMemory.filter(m => m.includes('[ОБУЧЕНИЕ') || m.includes('[НАБЛЮДЕНИЕ') || m.includes('[ЧАТ стиль') || m.includes('[стиль стримера'));
+    const sessionMem = aiBot.longMemory.filter(m => !trainMem.includes(m));
+    if (trainMem.length) longMemStr += `\nКАК ОБЩАЕТСЯ ЭТОТ ЧАТ:\n${trainMem.slice(-4).join('\n')}\n`;
+    if (sessionMem.length) longMemStr += `\nЧТО ТЫ ЗНАЕШЬ ИЗ ПРОШЛЫХ СЕССИЙ:\n${sessionMem.slice(-8).join('\n')}\n`;
+  }
 
   // Контекст игры — анализируем последние сообщения чата на тему игры
   const recentMsgs = state.messages.slice(-memoryCount);
   const chatText = recentMsgs.map(m => `${m.displayName||m.username}: ${m.text}`).join('\n');
 
-  const gameCtx = detectGameContext(recentMsgs);
+  // Игровой контекст — ТОЛЬКО если есть скриншот, иначе не упоминаем игру вообще
+  const hasScreenshot = !!aiBot.screenshotBase64;
+  const gameCtx = hasScreenshot ? detectGameContext(recentMsgs) : null;
 
-  // Живой контекст — что происходит прямо сейчас
+  // Живой контекст
   const liveCtxParts = [];
   if (aiBot.lastStreamerSpeech) liveCtxParts.push(`стример только что сказал вслух: "${aiBot.lastStreamerSpeech}"`);
-  if (aiBot.screenshotBase64) liveCtxParts.push('есть скриншот текущего момента стрима');
   const liveCtx = liveCtxParts.length ? `\n[СЕЙЧАС: ${liveCtxParts.join('; ')}]` : '';
 
-  // Что ты знаешь о стримере из прошлых сессий
+  // Паттерны стримера
   const streamerStyle = aiBot.streamerPatterns?.length
     ? `\nСтример часто говорит/делает: ${aiBot.streamerPatterns.slice(-8).join(', ')}.`
     : '';
 
-  // Последние 5 сообщений как "горячий контекст" — самое важное
-  const hotContext = recentMsgs.slice(-5).map(m => `${m.displayName||m.username}: ${m.text}`).join('\n');
+  // Горячий контекст — последние 6 сообщений
+  const hotContext = recentMsgs.slice(-6).map(m => `${m.displayName||m.username}: ${m.text}`).join('\n');
 
-  // Собираем системный промпт — чёткий, конкретный
+  // Системный промпт — без упоминания игры если нет картинки
+  const gameNote = hasScreenshot && gameCtx
+    ? `\nСейчас в чате обсуждают: ${gameCtx}.`
+    : hasScreenshot
+      ? '\nСкриншот стрима виден — ориентируйся на него.'
+      : '\nТы не видишь экран стримера — не комментируй игровые моменты, только общение с чатом.';
+
   const systemPrompt = `${basePrompt}
+${longMemStr}${streamerStyle}${gameNote}
+Настроение: ${emotionInfo.label}.
 
-СЕЙЧАС ТЫ СМОТРИШЬ СТРИМ${gameCtx ? ` (${gameCtx})` : ''}.
-Ты уже давно здесь, видела что происходило. Настроение: ${emotionInfo.label}.
-${longMemStr}${streamerStyle}
+ПРАВИЛА:
+- Ты человек, не ИИ. Если спрашивают — обычный зритель.
+- Строчные буквы, без тире, без смайликов и эмодзи.
+- 1-2 предложения. Иногда одно слово.
+- Отвечай конкретно на то что написали — не абстрактно.
+- Не объясняй очевидное, не поучай.
+- Если нечего сказать — верни только точку.`;
 
-ПРАВИЛА ПОВЕДЕНИЯ В ЧАТЕ:
-- Ты человек, не ИИ. Если кто-то спрашивает — ты обычный зритель.
-- Пиши строчными, как в реальном чате. Без тире.
-- 1-2 предложения максимум. Иногда одно слово или короткая реакция.
-- Никаких смайликов и эмодзи.
-- Отвечай на КОНКРЕТНЫЙ вопрос или момент — не абстрактно.
-- Если спрашивают про игру — отвечай исходя из того что видишь на экране и слышишь.
-- Иногда можно ошибиться в слове или написать небрежно — это нормально.
-- Не объясняй очевидное, не поучай, не пиши "хороший вопрос".
-- Если нечего сказать — лучше промолчи (верни точку).`;
-
-  // Формируем запрос с умным контекстом
   let requestText = '';
   const whoAsked = triggerMsg ? (triggerMsg.displayName || triggerMsg.username) : '';
 
   if (triggerType === 'mention') {
-    requestText = `Последние сообщения чата:\n${chatText}${liveCtx}\n\n${whoAsked} обратился к тебе: "${triggerMsg.text}"\n\nТвой ответ (помни — ты живой зритель, отвечай конкретно и коротко):`;
+    requestText = `Чат:\n${chatText}${liveCtx}\n\n${whoAsked}: "${triggerMsg.text}"\n\nОтветь:`;
   } else if (triggerType === 'viewer_react') {
-    requestText = `Последние сообщения:\n${hotContext}${liveCtx}\n\n${whoAsked}: "${triggerMsg.text}"\n\nЕсть ли что сказать по этому поводу? Если нет — точка. Если да — одна короткая фраза:`;
+    requestText = `Последние сообщения:\n${hotContext}${liveCtx}\n\n${whoAsked}: "${triggerMsg.text}"\n\nРеакция или точка:`;
   } else if (triggerType === 'initiative') {
-    requestText = `Последние сообщения:\n${hotContext}${liveCtx}\n\nПосмотри что происходит. Есть ли что-то живое и конкретное сказать? Одна фраза или точка если нечего:`;
+    requestText = `Последние сообщения:\n${hotContext}${liveCtx}\n\nОдна фраза по ситуации или точка:`;
   } else if (triggerType === 'audio') {
-    requestText = `Последние сообщения чата:\n${hotContext}${liveCtx}\n\nСтример сказал тебе: "${triggerMsg.text}"\n\nОтветь ему напрямую, коротко и живо:`;
+    requestText = `Чат:\n${hotContext}${liveCtx}\n\nСтример сказал: "${triggerMsg.text}"\n\nОтветь:`;
   }
 
   const userParts = [];
-  if (aiBot.screenshotBase64) {
+  if (hasScreenshot) {
     userParts.push({ inlineData: { mimeType: aiBot.screenshotMime, data: aiBot.screenshotBase64 } });
-    userParts.push({ text: '[Скриншот стрима — используй чтобы понять что происходит в игре]\n' });
+    userParts.push({ text: '[Скриншот стрима]\n' + requestText });
+  } else {
+    userParts.push({ text: requestText });
   }
-  userParts.push({ text: requestText });
 
   aiBot.chatHistory.push({ role: 'user', parts: userParts });
   if (aiBot.chatHistory.length > 12) aiBot.chatHistory = aiBot.chatHistory.slice(-12);
