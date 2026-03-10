@@ -1805,12 +1805,21 @@ function renderAiBotAccountSelect() {
 }
 
 // Вызывается на каждое входящее сообщение чата
+const _aiBotSeenMsgs = new Set();
+
 async function checkAiBot(msg) {
   if (!aiBot.active) return;
   const nick = (document.getElementById('aiBotNick')?.value || localStorage.getItem('aiBotNick') || '').trim().toLowerCase();
   if (!nick) return;
-  // Проверяем упоминание ника
   if (!msg.text.toLowerCase().includes(nick)) return;
+
+  // Дедупликация — одно сообщение может прийти от нескольких WS соединений
+  const msgKey = `${msg.username}:${msg.text}:${msg.time}`;
+  if (_aiBotSeenMsgs.has(msgKey)) return;
+  _aiBotSeenMsgs.add(msgKey);
+  // Чистим кэш через 10 сек
+  setTimeout(() => _aiBotSeenMsgs.delete(msgKey), 10000);
+
   // Не реагируем на собственные сообщения
   const accId = document.getElementById('aiBotAccount')?.value || localStorage.getItem('aiBotAccId');
   const botAcc = getAccount(accId);
@@ -1868,7 +1877,7 @@ async function callGemini(triggerMsg, botAcc) {
     };
 
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
     );
 
