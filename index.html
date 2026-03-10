@@ -2205,7 +2205,7 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
   } else if (triggerType === 'initiative') {
     requestText = `Чат:\n${recentMsgs}${speechCtx}\n\nНапиши короткую реплику по ситуации от себя:`;
   } else if (triggerType === 'audio') {
-    requestText = `Чат:\n${recentMsgs}\n\nСтример только что сказал вслух: "${triggerMsg.text.replace('[стример сказал вслух: "','').replace('"]','')}"${speechCtx}\n\nОтреагируй как живой зритель который это услышал, коротко:`;
+    requestText = `Чат:\n${recentMsgs}${speechCtx}\n\nСтример позвал тебя голосом и сказал: "${triggerMsg.text}"\n\nОтветь как будто услышал его, коротко и по делу:`;
   }
 
   const userParts = [];
@@ -2378,16 +2378,38 @@ async function processAudioChunk(mimeType) {
     document.getElementById('audioTranscript').textContent = `"${transcript}"`;
     aiBotLog(`Стример сказал: "${transcript.slice(0,60)}"`, 'info');
 
-    // Добавляем в контекст бота как событие
+    // Всегда сохраняем в контекст
     aiBot.lastStreamerSpeech = transcript;
 
-    // Если бот активен — может отреагировать с небольшим шансом
-    if (aiBot.active && Math.random() < 0.3 && Date.now() - aiBot.lastSpoke > 15000) {
-      const accId = localStorage.getItem('aiBotAccId');
-      const botAcc = getAccount(accId);
-      if (botAcc?.connected) {
-        await callGemini({ text: `[стример сказал вслух: "${transcript}"]`, username: 'streamer', displayName: 'streamer', msgId: null }, botAcc, 'audio');
-      }
+    // Реагируем ТОЛЬКО если стример упомянул ник бота голосом
+    if (!aiBot.active) return;
+    const nick = (document.getElementById('aiBotNick')?.value || localStorage.getItem('aiBotNick') || '').trim().toLowerCase();
+    if (!nick) return;
+
+    const transcriptLow = transcript.toLowerCase();
+    // Проверяем что ник есть в транскрипции (гибко — учитываем возможные ошибки распознавания)
+    const nickParts = nick.split('').join('.?'); // "ария" → "а.?р.?и.?я" — прощает 1 пропущенный символ
+    const nickRegex = new RegExp(nick, 'i');
+    const nickFuzzy = new RegExp(nickParts, 'i');
+
+    if (!nickRegex.test(transcriptLow) && !nickFuzzy.test(transcriptLow)) {
+      aiBotLog(`Ник не упомянут в речи, молчу`, 'info');
+      return;
+    }
+
+    aiBotLog(`Стример позвал "${nick}" голосом!`, 'ok');
+
+    if (Date.now() - aiBot.lastSpoke < 8000) {
+      aiBotLog('Слишком быстро после прошлого ответа, пропускаю', 'info');
+      return;
+    }
+
+    const accId = localStorage.getItem('aiBotAccId');
+    const botAcc = getAccount(accId);
+    if (botAcc?.connected) {
+      // Небольшая естественная пауза перед ответом
+      await sleep(1500 + Math.random() * 2000);
+      await callGemini({ text: transcript, username: 'streamer', displayName: 'стример', msgId: null }, botAcc, 'audio');
     }
   } catch(e) {
     aiBotLog(`Ошибка транскрипции: ${e.message}`, 'err');
