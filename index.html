@@ -589,7 +589,22 @@
           <video id="screenVideo" style="display:none" autoplay muted></video>
         </div>
 
-        <!-- УПРАВЛЕНИЕ -->
+        <!-- АУДИО -->
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px">
+          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:10px">🎙 Слушать стримера</div>
+          <div style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.6">Бот слышит голос стримера и реагирует на сказанное. Нужен <strong>VB-Cable</strong> или выбрать микрофон/динамики как источник.</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+            <button class="btn btn-purple btn-sm" id="audioStartBtn" onclick="startAudioCapture()">🎙 Начать слушать</button>
+            <button class="btn btn-red btn-sm" id="audioStopBtn" onclick="stopAudioCapture()" style="display:none">⏹ Стоп</button>
+            <div style="display:flex;align-items:center;gap:6px">
+              <label style="font-size:11px;color:var(--text3)">Анализ каждые</label>
+              <input type="number" class="delay-input" id="audioInterval" value="15" min="5" max="60" style="width:50px">
+              <label style="font-size:11px;color:var(--text3)">сек</label>
+            </div>
+          </div>
+          <div id="audioStatus" style="font-size:11px;color:var(--text3)">Не активен</div>
+          <div id="audioTranscript" style="margin-top:8px;background:var(--bg4);border-radius:6px;padding:8px;font-size:11px;color:var(--text3);min-height:32px;display:none;line-height:1.6;font-style:italic"></div>
+        </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
           <button class="btn btn-green" id="aiBotStartBtn" onclick="startAiBot()">▶ Включить AI бота</button>
           <button class="btn btn-red" id="aiBotStopBtn" onclick="stopAiBot()" style="display:none">⏹ Выключить + сохранить память</button>
@@ -855,12 +870,23 @@ function parsePrivMsg(line) {
     let tags = {}, rest = line;
     if (line.startsWith('@')) {
       const ti = line.indexOf(' ');
-      line.slice(1, ti).split(';').forEach(t => { const [k,v]=t.split('='); tags[k]=v; });
+      line.slice(1, ti).split(';').forEach(t => { const [k,...v]=t.split('='); tags[k]=v.join('='); });
       rest = line.slice(ti+1);
     }
     const m = rest.match(/^:(\S+)!\S+ PRIVMSG (#\S+) :(.+)/);
     if (!m) return null;
-    return { username: m[1], channel: m[2], text: m[3], color: tags.color||'#9147ff', displayName: tags['display-name']||m[1], time: nowTime() };
+    return {
+      username: m[1],
+      channel: m[2],
+      text: m[3],
+      color: tags.color||'#9147ff',
+      displayName: tags['display-name']||m[1],
+      time: nowTime(),
+      msgId: tags['id'] || null,
+      replyParentMsgId: tags['reply-parent-msg-id'] || null,
+      replyParentUser: tags['reply-parent-user-login'] || null,
+      replyParentText: tags['reply-parent-msg-body']?.replace(/\\s/g,' ') || null,
+    };
   } catch(e) { return null; }
 }
 
@@ -872,24 +898,33 @@ function sendMessage(acc, text) {
     const msg = `PRIVMSG #${acc.channel} :${text}`;
     addLog(`@${acc.username} отправка: ${msg}`, 'info');
     acc.ws.send(msg);
-    // Twitch не возвращает эхо отправителю — добавляем локально
     acc.msgCount++;
-    addChatMessage({
-      username: acc.username,
-      displayName: acc.username,
-      text: text,
-      color: acc.color,
-      channel: '#' + acc.channel,
-      ownAccountId: acc.id,
-      time: nowTime()
-    });
+    addChatMessage({ username: acc.username, displayName: acc.username, text, color: acc.color, channel: '#'+acc.channel, ownAccountId: acc.id, time: nowTime() });
     renderSidebar();
     return true;
-  }
-  catch(e) {
+  } catch(e) {
     addLog(`@${acc.username} ошибка отправки: ${e.message}`, 'err');
     toast(`Ошибка отправки @${acc.username}`, 'error');
     return false;
+  }
+}
+
+// Reply — отвечает через Twitch reply thread (без упоминания ника в тексте)
+function sendReply(acc, text, replyMsgId) {
+  if (!acc.ws || !acc.connected) { toast(`@${acc.username} не подключён`, 'error'); return false; }
+  if (acc.ws.readyState !== WebSocket.OPEN) return false;
+  if (!text.trim() || !replyMsgId) return sendMessage(acc, text);
+  try {
+    // Twitch reply через @reply-parent-msg-id тег
+    const msg = `@reply-parent-msg-id=${replyMsgId} PRIVMSG #${acc.channel} :${text}`;
+    addLog(`@${acc.username} reply: ${text}`, 'info');
+    acc.ws.send(msg);
+    acc.msgCount++;
+    addChatMessage({ username: acc.username, displayName: acc.username, text, color: acc.color, channel: '#'+acc.channel, ownAccountId: acc.id, time: nowTime() });
+    renderSidebar();
+    return true;
+  } catch(e) {
+    return sendMessage(acc, text); // fallback
   }
 }
 
@@ -2146,13 +2181,20 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
     .map(m => `${m.displayName||m.username}: ${m.text}`)
     .join('\n');
 
+  // Если есть свежая речь стримера — добавляем в контекст
+  const speechCtx = aiBot.lastStreamerSpeech
+    ? `\n[Стример только что сказал вслух: "${aiBot.lastStreamerSpeech}"]`
+    : '';
+
   let requestText = '';
   if (triggerType === 'mention') {
-    requestText = `Чат:\n${recentMsgs}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nОдин короткий ответ без тире:`;
+    requestText = `Чат:\n${recentMsgs}${speechCtx}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nОтветь коротко, без тире:`;
   } else if (triggerType === 'viewer_react') {
-    requestText = `Чат:\n${recentMsgs}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nКороткая реакция (можно промолчать — тогда напиши только "."  и я не отправлю):`;
+    requestText = `Чат:\n${recentMsgs}${speechCtx}\n\n${triggerMsg.displayName||triggerMsg.username}: "${triggerMsg.text}"\n\nКороткая реакция. Если нечего сказать — напиши только точку:`;
   } else if (triggerType === 'initiative') {
-    requestText = `Чат:\n${recentMsgs}\n\nНапиши одну короткую реплику по ситуации. Без тире:`;
+    requestText = `Чат:\n${recentMsgs}${speechCtx}\n\nНапиши короткую реплику по ситуации от себя:`;
+  } else if (triggerType === 'audio') {
+    requestText = `Чат:\n${recentMsgs}\n\nСтример только что сказал вслух: "${triggerMsg.text.replace('[стример сказал вслух: "','').replace('"]','')}"${speechCtx}\n\nОтреагируй как живой зритель который это услышал, коротко:`;
   }
 
   const userParts = [];
@@ -2214,7 +2256,11 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
     aiBotLog(`💬 "${finalReply}"`, 'ai');
 
     if (botAcc.connected) {
-      sendMessage(botAcc, finalReply);
+      if (triggerMsg?.msgId && triggerType === 'mention') {
+        sendReply(botAcc, finalReply, triggerMsg.msgId);
+      } else {
+        sendMessage(botAcc, finalReply);
+      }
       aiBotLog(`✅ Отправлено`, 'ok');
     } else {
       aiBotLog(`❌ @${botAcc.username} не подключён`, 'err');
@@ -2226,8 +2272,128 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
   }
 }
 
-// INIT
-loadAccounts();
+// ── АУДИО ЗАХВАТ ──
+let _audioStream = null;
+let _audioRecorder = null;
+let _audioTimer = null;
+let _audioChunks = [];
+
+async function startAudioCapture() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    _audioStream = stream;
+    _audioChunks = [];
+
+    document.getElementById('audioStartBtn').style.display = 'none';
+    document.getElementById('audioStopBtn').style.display = '';
+    document.getElementById('audioStatus').textContent = 'Слушаю...';
+    document.getElementById('audioStatus').style.color = 'var(--green)';
+    document.getElementById('audioTranscript').style.display = '';
+    document.getElementById('audioTranscript').textContent = 'Жду речи...';
+    aiBotLog('Захват аудио запущен', 'ok');
+
+    const interval = parseInt(document.getElementById('audioInterval').value || '15') * 1000;
+    startAudioChunk(interval);
+  } catch(e) {
+    aiBotLog(`Ошибка аудио: ${e.message}`, 'err');
+    toast('Не удалось получить доступ к микрофону', 'error');
+  }
+}
+
+function startAudioChunk(interval) {
+  if (!_audioStream) return;
+  _audioChunks = [];
+
+  try {
+    // Пробуем webm/opus, если нет — любой поддерживаемый
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : '';
+
+    _audioRecorder = new MediaRecorder(_audioStream, mimeType ? { mimeType } : {});
+    _audioRecorder.ondataavailable = e => { if (e.data.size > 0) _audioChunks.push(e.data); };
+    _audioRecorder.onstop = () => processAudioChunk(_audioRecorder.mimeType);
+    _audioRecorder.start();
+
+    _audioTimer = setTimeout(() => {
+      if (_audioRecorder && _audioRecorder.state === 'recording') _audioRecorder.stop();
+      if (_audioStream) startAudioChunk(interval);
+    }, interval);
+  } catch(e) {
+    aiBotLog(`Ошибка записи: ${e.message}`, 'err');
+  }
+}
+
+async function processAudioChunk(mimeType) {
+  if (!_audioChunks.length) return;
+  const key = document.getElementById('geminiKey')?.value.trim() || localStorage.getItem('aiBotGeminiKey');
+  if (!key) return;
+
+  const blob = new Blob(_audioChunks, { type: mimeType || 'audio/webm' });
+  if (blob.size < 1000) return; // слишком маленький — тишина
+
+  // Конвертируем в base64
+  const b64 = await new Promise(res => {
+    const reader = new FileReader();
+    reader.onload = () => res(reader.result.split(',')[1]);
+    reader.readAsDataURL(blob);
+  });
+
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
+
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            role: 'user',
+            parts: [
+              { inlineData: { mimeType: mimeType || 'audio/webm', data: b64 } },
+              { text: 'Транскрибируй что сказано в этом аудио. Если тишина или неразборчиво — ответь только словом "тишина". Только транскрипция, без пояснений.' }
+            ]
+          }],
+          generationConfig: { maxOutputTokens: 200, temperature: 0.1 }
+        })
+      }
+    );
+    const data = await res.json();
+    const transcript = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (!transcript || transcript.toLowerCase().includes('тишина')) return;
+
+    document.getElementById('audioTranscript').textContent = `"${transcript}"`;
+    aiBotLog(`Стример сказал: "${transcript.slice(0,60)}"`, 'info');
+
+    // Добавляем в контекст бота как событие
+    aiBot.lastStreamerSpeech = transcript;
+
+    // Если бот активен — может отреагировать с небольшим шансом
+    if (aiBot.active && Math.random() < 0.3 && Date.now() - aiBot.lastSpoke > 15000) {
+      const accId = localStorage.getItem('aiBotAccId');
+      const botAcc = getAccount(accId);
+      if (botAcc?.connected) {
+        await callGemini({ text: `[стример сказал вслух: "${transcript}"]`, username: 'streamer', displayName: 'streamer', msgId: null }, botAcc, 'audio');
+      }
+    }
+  } catch(e) {
+    aiBotLog(`Ошибка транскрипции: ${e.message}`, 'err');
+  }
+}
+
+function stopAudioCapture() {
+  if (_audioRecorder && _audioRecorder.state === 'recording') _audioRecorder.stop();
+  if (_audioTimer) { clearTimeout(_audioTimer); _audioTimer = null; }
+  if (_audioStream) { _audioStream.getTracks().forEach(t => t.stop()); _audioStream = null; }
+  aiBot.lastStreamerSpeech = null;
+  document.getElementById('audioStartBtn').style.display = '';
+  document.getElementById('audioStopBtn').style.display = 'none';
+  document.getElementById('audioStatus').textContent = 'Не активен';
+  document.getElementById('audioStatus').style.color = 'var(--text3)';
+  document.getElementById('audioTranscript').style.display = 'none';
+  aiBotLog('Аудио захват остановлен', 'info');
+}
 loadClientId();
 loadAiBotSettings();
 loadLongMemory();
