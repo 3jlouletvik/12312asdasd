@@ -539,7 +539,14 @@
               <input type="number" class="delay-input" id="aiBotDelay" value="3" min="1" max="30" style="width:80px">
             </div>
 
+            <div class="form-field">
+              <label>Самостоятельные реплики (мин)</label>
+              <input type="number" class="delay-input" id="aiBotInitiative" value="0" min="0" max="60" style="width:80px">
+              <div class="form-hint">0 = выключено. Бот сам напишет раз в N минут если молчит</div>
+            </div>
+
             <button class="btn btn-outline btn-sm" style="width:100%;margin-top:4px" onclick="saveAiBotSettings()">💾 Сохранить настройки</button>
+            <button class="btn btn-red btn-sm" style="width:100%;margin-top:6px" onclick="clearLongMemory()">🗑 Очистить долгосрочную память</button>
           </div>
 
           <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px">
@@ -576,8 +583,9 @@
         <!-- УПРАВЛЕНИЕ -->
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
           <button class="btn btn-green" id="aiBotStartBtn" onclick="startAiBot()">▶ Включить AI бота</button>
-          <button class="btn btn-red" id="aiBotStopBtn" onclick="stopAiBot()" style="display:none">⏹ Выключить</button>
+          <button class="btn btn-red" id="aiBotStopBtn" onclick="stopAiBot()" style="display:none">⏹ Выключить + сохранить память</button>
           <div id="aiBotStatus" style="font-size:12px;color:var(--text3)">Выключен</div>
+          <div id="aiBotEmotionState" style="font-size:13px;margin-left:4px"></div>
         </div>
 
         <!-- ЛОГ БОТА -->
@@ -1701,14 +1709,392 @@ function loadAccounts() {
 }
 
 // ══════════════════════════════════════════
-// AI BOT — Gemini
+// AI BOT — Gemini (умная версия)
 // ══════════════════════════════════════════
 const aiBot = {
   active: false,
   screenshotBase64: null,
   screenshotMime: null,
-  chatHistory: [],    // {role:'user'|'model', parts:[{text}]}
+  chatHistory: [],        // краткосрочная память текущей сессии
+  emotion: 'neutral',     // текущее эмоциональное состояние
+  emotionIntensity: 0,    // 0-10 накопленная интенсивность
+  lastSpoke: 0,           // timestamp последнего сообщения бота
+  initiativeTimer: null,  // таймер для самостоятельных реплик
+  longMemory: [],         // долгосрочные факты между сессиями
 };
+
+// Эмоциональные состояния и их влияние
+const EMOTIONS = {
+  neutral:  { label: '😐 Спокоен',    temp: 0.85 },
+  amused:   { label: '😄 Весело',     temp: 1.0  },
+  excited:  { label: '🔥 Заводится',  temp: 1.1  },
+  bored:    { label: '😴 Скучает',    temp: 0.7  },
+  salty:    { label: '😤 Немного бомбит', temp: 0.95 },
+  hype:     { label: '🚀 Полный хайп', temp: 1.15 },
+};
+
+function aiBotLog(text, type='info') {
+  const el = document.getElementById('aiBotLog');
+  if (!el) return;
+  const line = document.createElement('div');
+  const colors = { info: 'var(--text3)', ok: 'var(--green)', err: 'var(--red)', ai: 'var(--purple)' };
+  line.style.color = colors[type] || colors.info;
+  line.textContent = `[${nowTime()}] ${text}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function updateEmotionUI() {
+  const el = document.getElementById('aiBotEmotionState');
+  if (el) el.textContent = EMOTIONS[aiBot.emotion]?.label || '😐';
+}
+
+// ── ДОЛГОСРОЧНАЯ ПАМЯТЬ ──
+function loadLongMemory() {
+  try {
+    const raw = localStorage.getItem('aiBotLongMemory');
+    if (raw) aiBot.longMemory = JSON.parse(raw);
+  } catch(e) {}
+}
+
+function saveLongMemory() {
+  try {
+    // Держим максимум 30 фактов
+    if (aiBot.longMemory.length > 30) aiBot.longMemory = aiBot.longMemory.slice(-30);
+    localStorage.setItem('aiBotLongMemory', JSON.stringify(aiBot.longMemory));
+  } catch(e) {}
+}
+
+function clearLongMemory() {
+  aiBot.longMemory = [];
+  localStorage.removeItem('aiBotLongMemory');
+  aiBotLog('Долгосрочная память очищена', 'info');
+  toast('Память бота очищена', 'info');
+}
+
+// После каждой сессии просим Gemini извлечь важные факты
+async function extractMemory() {
+  if (aiBot.chatHistory.length < 4) return;
+  const key = localStorage.getItem('aiBotGeminiKey');
+  if (!key) return;
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
+  const historyText = aiBot.chatHistory
+    .map(h => `${h.role}: ${h.parts[0]?.text?.slice(0,200) || ''}`)
+    .join('\n');
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text:
+            `Из этого разговора в чате стрима извлеки 2-4 коротких факта которые стоит запомнить на будущее (о стримере, играх, событиях). Формат: одна строка — один факт. Только факты, никаких пояснений.\n\n${historyText}`
+          }] }],
+          generationConfig: { maxOutputTokens: 150, temperature: 0.3 }
+        })
+      }
+    );
+    const data = await res.json();
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (text) {
+      const facts = text.split('\n').map(f => f.trim()).filter(f => f.length > 5);
+      const dated = facts.map(f => `[${new Date().toLocaleDateString('ru')}] ${f}`);
+      aiBot.longMemory.push(...dated);
+      saveLongMemory();
+      aiBotLog(`Запомнено ${dated.length} фактов в долгосрочную память`, 'ok');
+    }
+  } catch(e) { aiBotLog(`Ошибка сохранения памяти: ${e.message}`, 'err'); }
+}
+
+function saveAiBotSettings() {
+  const key = document.getElementById('geminiKey').value.trim();
+  const nick = document.getElementById('aiBotNick').value.trim();
+  const prompt = document.getElementById('aiBotPrompt').value.trim();
+  const accId = document.getElementById('aiBotAccount').value;
+  const memory = document.getElementById('aiBotMemory').value;
+  const delay = document.getElementById('aiBotDelay').value;
+  const model = document.getElementById('aiBotModel')?.value || '';
+  const initInterval = document.getElementById('aiBotInitiative')?.value || '0';
+  if (key) localStorage.setItem('aiBotGeminiKey', key);
+  localStorage.setItem('aiBotNick', nick);
+  localStorage.setItem('aiBotPrompt', prompt);
+  localStorage.setItem('aiBotAccId', accId);
+  localStorage.setItem('aiBotMemory', memory);
+  localStorage.setItem('aiBotDelay', delay);
+  if (model) localStorage.setItem('aiBotModel', model);
+  localStorage.setItem('aiBotInitiative', initInterval);
+  toast('Настройки AI бота сохранены', 'success');
+}
+
+function loadAiBotSettings() {
+  const set = (id, key) => { const v = localStorage.getItem(key); if (v && document.getElementById(id)) document.getElementById(id).value = v; };
+  set('geminiKey', 'aiBotGeminiKey');
+  set('aiBotModel', 'aiBotModel');
+  set('aiBotNick', 'aiBotNick');
+  set('aiBotPrompt', 'aiBotPrompt');
+  set('aiBotAccount', 'aiBotAccId');
+  set('aiBotMemory', 'aiBotMemory');
+  set('aiBotDelay', 'aiBotDelay');
+  set('aiBotInitiative', 'aiBotInitiative');
+}
+
+function loadScreenshot(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const dataUrl = e.target.result;
+    const [header, b64] = dataUrl.split(',');
+    aiBot.screenshotBase64 = b64;
+    aiBot.screenshotMime = file.type;
+    document.getElementById('screenshotImg').src = dataUrl;
+    document.getElementById('screenshotPreview').style.display = '';
+    aiBotLog(`Скриншот загружен: ${file.name}`, 'ok');
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearScreenshot() {
+  aiBot.screenshotBase64 = null;
+  aiBot.screenshotMime = null;
+  document.getElementById('screenshotPreview').style.display = 'none';
+  document.getElementById('streamScreenshot').value = '';
+  aiBotLog('Скриншот убран', 'info');
+}
+
+function startAiBot() {
+  const key = document.getElementById('geminiKey').value.trim() || localStorage.getItem('aiBotGeminiKey');
+  const nick = document.getElementById('aiBotNick').value.trim() || localStorage.getItem('aiBotNick');
+  const accId = document.getElementById('aiBotAccount').value || localStorage.getItem('aiBotAccId');
+  if (!key) { toast('Введи Gemini API Key', 'error'); return; }
+  if (!nick) { toast('Введи ник бота (триггер)', 'error'); return; }
+  if (!accId) { toast('Выбери аккаунт бота', 'error'); return; }
+  const acc = getAccount(accId);
+  if (!acc || !acc.connected) { toast('Аккаунт бота не подключён к каналу', 'error'); return; }
+
+  aiBot.active = true;
+  aiBot.chatHistory = [];
+  aiBot.emotion = 'neutral';
+  aiBot.emotionIntensity = 0;
+  aiBot.lastSpoke = 0;
+  document.getElementById('aiBotStartBtn').style.display = 'none';
+  document.getElementById('aiBotStopBtn').style.display = '';
+  document.getElementById('aiBotStatus').textContent = `✅ @${acc.username} · триггер: "${nick}"`;
+  document.getElementById('aiBotStatus').style.color = 'var(--green)';
+  updateEmotionUI();
+  aiBotLog(`AI бот запущен. Аккаунт: @${acc.username}. Триггер: "${nick}"`, 'ok');
+  if (aiBot.longMemory.length) aiBotLog(`Загружено ${aiBot.longMemory.length} воспоминаний`, 'ok');
+
+  // Запускаем самостоятельные реплики если включено
+  startInitiativeTimer(acc);
+  toast('AI бот включён!', 'success');
+}
+
+async function stopAiBot() {
+  // Сохраняем память перед выключением
+  await extractMemory();
+  aiBot.active = false;
+  aiBot.chatHistory = [];
+  if (aiBot.initiativeTimer) { clearTimeout(aiBot.initiativeTimer); aiBot.initiativeTimer = null; }
+  document.getElementById('aiBotStartBtn').style.display = '';
+  document.getElementById('aiBotStopBtn').style.display = 'none';
+  document.getElementById('aiBotStatus').textContent = 'Выключен';
+  document.getElementById('aiBotStatus').style.color = 'var(--text3)';
+  aiBotLog('AI бот остановлен. Память сохранена.', 'info');
+}
+
+function renderAiBotAccountSelect() {
+  const sel = document.getElementById('aiBotAccount');
+  if (!sel) return;
+  const saved = sel.value || localStorage.getItem('aiBotAccId') || '';
+  sel.innerHTML = '<option value="">Выбрать аккаунт...</option>';
+  state.accounts.forEach(acc => {
+    const o = document.createElement('option');
+    o.value = acc.id; o.textContent = `@${acc.username}`;
+    sel.appendChild(o);
+  });
+  if (saved) sel.value = saved;
+}
+
+// ── ЭМОЦИИ ──
+function updateEmotion(chatText) {
+  const t = chatText.toLowerCase();
+  // Накапливаем интенсивность по событиям
+  if (/lol|lmao|😂|хаха|кек|💀|орнул/.test(t)) { aiBot.emotionIntensity += 2; if (aiBot.emotionIntensity > 6) aiBot.emotion = 'amused'; }
+  if (/gg|победа|выиграл|ez|хайп|🔥|🚀/.test(t)) { aiBot.emotionIntensity += 3; aiBot.emotion = 'hype'; }
+  if (/умер|слился|провал|опять|снова|блин|ещё раз/.test(t)) { aiBot.emotionIntensity += 1; if (aiBot.emotionIntensity > 5) aiBot.emotion = 'salty'; }
+  // Постепенное угасание
+  aiBot.emotionIntensity = Math.max(0, aiBot.emotionIntensity - 0.3);
+  if (aiBot.emotionIntensity < 2) aiBot.emotion = 'neutral';
+  updateEmotionUI();
+}
+
+// ── САМОСТОЯТЕЛЬНЫЕ РЕПЛИКИ ──
+function startInitiativeTimer(botAcc) {
+  if (aiBot.initiativeTimer) clearTimeout(aiBot.initiativeTimer);
+  const intervalMin = parseInt(localStorage.getItem('aiBotInitiative') || '0');
+  if (!intervalMin || intervalMin < 1) return; // выключено
+
+  const schedule = () => {
+    if (!aiBot.active) return;
+    const ms = (intervalMin * 60 + Math.random() * intervalMin * 30) * 1000;
+    aiBot.initiativeTimer = setTimeout(async () => {
+      if (!aiBot.active || !botAcc.connected) return;
+      // Не пишем если недавно уже отвечали
+      if (Date.now() - aiBot.lastSpoke < 30000) { schedule(); return; }
+      aiBotLog('Самостоятельная реплика...', 'info');
+      await callGemini(null, botAcc, 'initiative');
+      schedule();
+    }, ms);
+  };
+  schedule();
+}
+
+// ── ДЕДУПЛИКАЦИЯ ──
+const _aiBotSeenMsgs = new Set();
+
+// ── ПРОВЕРКА ВХОДЯЩИХ СООБЩЕНИЙ ──
+async function checkAiBot(msg) {
+  if (!aiBot.active) return;
+
+  // Обновляем эмоцию на основе чата (всегда, без триггера)
+  updateEmotion(msg.text);
+
+  const nick = (document.getElementById('aiBotNick')?.value || localStorage.getItem('aiBotNick') || '').trim().toLowerCase();
+  const accId = document.getElementById('aiBotAccount')?.value || localStorage.getItem('aiBotAccId');
+  const botAcc = getAccount(accId);
+  if (!botAcc) return;
+
+  // Не реагируем на себя
+  if (msg.username.toLowerCase() === botAcc.username.toLowerCase()) return;
+
+  // Реакция на других зрителей (не только стримера) — случайно 15%
+  const ownNames = state.accounts.map(a => a.username.toLowerCase());
+  const isRealViewer = !ownNames.includes(msg.username.toLowerCase());
+  const mentionsBot = nick && msg.text.toLowerCase().includes(nick);
+
+  // Дедупликация
+  const msgKey = `${msg.username}:${msg.text}:${msg.time}`;
+  if (_aiBotSeenMsgs.has(msgKey)) return;
+  _aiBotSeenMsgs.add(msgKey);
+  setTimeout(() => _aiBotSeenMsgs.delete(msgKey), 10000);
+
+  let triggerType = null;
+  if (mentionsBot) {
+    triggerType = 'mention';
+  } else if (isRealViewer && Math.random() < 0.15 && Date.now() - aiBot.lastSpoke > 20000) {
+    triggerType = 'viewer_react';
+  }
+
+  if (!triggerType) return;
+
+  const delay = parseInt(document.getElementById('aiBotDelay')?.value || localStorage.getItem('aiBotDelay') || '3') * 1000;
+  if (triggerType === 'mention') aiBotLog(`Упомянут от @${msg.username}: "${msg.text.slice(0,60)}"`, 'info');
+  else aiBotLog(`Реакция на @${msg.username} (${Math.round(15)}% шанс)`, 'info');
+
+  await sleep(delay + Math.random() * 2000);
+  if (!aiBot.active) return;
+
+  await callGemini(msg, botAcc, triggerType);
+}
+
+async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
+  const key = document.getElementById('geminiKey')?.value.trim() || localStorage.getItem('aiBotGeminiKey');
+  if (!key) { aiBotLog('Нет Gemini API Key', 'err'); return; }
+
+  const basePrompt = document.getElementById('aiBotPrompt')?.value.trim()
+    || localStorage.getItem('aiBotPrompt')
+    || 'Ты дружелюбный зритель стрима. Отвечай коротко, на русском.';
+
+  const memoryCount = parseInt(document.getElementById('aiBotMemory')?.value || localStorage.getItem('aiBotMemory') || '30');
+  const emotionInfo = EMOTIONS[aiBot.emotion] || EMOTIONS.neutral;
+
+  // Собираем долгосрочную память
+  const longMemoryStr = aiBot.longMemory.length
+    ? `\nЧТО ТЫ УЖЕ ЗНАЕШЬ (из прошлых сессий):\n${aiBot.longMemory.slice(-15).join('\n')}\n`
+    : '';
+
+  // Текущее эмоциональное состояние
+  const emotionStr = `\nТВОЁ ТЕКУЩЕЕ НАСТРОЕНИЕ: ${emotionInfo.label}. Пусть это слегка чувствуется в ответе.`;
+
+  const systemPrompt = basePrompt + longMemoryStr + emotionStr;
+
+  // Последние сообщения чата
+  const recentMsgs = state.messages.slice(-memoryCount)
+    .map(m => `${m.displayName||m.username}: ${m.text}`)
+    .join('\n');
+
+  // Формируем текст запроса в зависимости от типа триггера
+  let requestText = '';
+  if (triggerType === 'mention') {
+    requestText = `Чат:\n${recentMsgs}\n\n@${triggerMsg.displayName||triggerMsg.username} обратился к тебе: "${triggerMsg.text}"\n\nОтветь как живой человек, коротко (1-2 предложения). Не начинай с обращения по имени.`;
+  } else if (triggerType === 'viewer_react') {
+    requestText = `Чат:\n${recentMsgs}\n\n@${triggerMsg.displayName||triggerMsg.username} написал: "${triggerMsg.text}"\n\nЕсли есть что сказать по теме — напиши коротко своё мнение или реакцию как зритель. Не обязательно отвечать именно этому человеку.`;
+  } else if (triggerType === 'initiative') {
+    requestText = `Чат:\n${recentMsgs}\n\nТы давно молчал. Напиши что-нибудь от себя — коротко, по ситуации на стриме. Это должно выглядеть как случайная реплика живого зрителя, не вопрос и не дежурная фраза.`;
+  }
+
+  const userParts = [];
+  if (aiBot.screenshotBase64) {
+    userParts.push({ inlineData: { mimeType: aiBot.screenshotMime, data: aiBot.screenshotBase64 } });
+    userParts.push({ text: '[Скриншот стрима прямо сейчас]' });
+  }
+  userParts.push({ text: requestText });
+
+  aiBot.chatHistory.push({ role: 'user', parts: userParts });
+  if (aiBot.chatHistory.length > 20) aiBot.chatHistory = aiBot.chatHistory.slice(-20);
+
+  aiBotLog('Запрос к Gemini...', 'info');
+
+  try {
+    const model = document.getElementById('aiBotModel')?.value
+      || localStorage.getItem('aiBotModel')
+      || 'gemini-3.1-flash-lite-preview';
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: systemPrompt }] },
+          contents: aiBot.chatHistory,
+          generationConfig: { maxOutputTokens: 120, temperature: emotionInfo.temp }
+        })
+      }
+    );
+
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
+
+    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (!reply) throw new Error('Пустой ответ');
+
+    aiBot.chatHistory.push({ role: 'model', parts: [{ text: reply }] });
+    aiBot.lastSpoke = Date.now();
+
+    aiBotLog(`💬 "${reply.slice(0, 80)}"`, 'ai');
+
+    if (botAcc.connected) {
+      sendMessage(botAcc, reply);
+      aiBotLog(`✅ Отправлено`, 'ok');
+    } else {
+      aiBotLog(`❌ @${botAcc.username} не подключён`, 'err');
+    }
+
+  } catch(e) {
+    aiBotLog(`Ошибка: ${e.message}`, 'err');
+    aiBot.chatHistory.pop();
+  }
+}
+
+// INIT
+loadAccounts();
+loadClientId();
+loadAiBotSettings();
+loadLongMemory();
+renderAll();
 
 function aiBotLog(text, type='info') {
   const el = document.getElementById('aiBotLog');
