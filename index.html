@@ -2505,78 +2505,103 @@ ${longMemStr}${streamerStyle}${gameNote}
     || localStorage.getItem('aiBotModel')
     || 'gemini-3.1-flash-lite-preview';
 
-  const modelFallback = [
-    primaryModel,
-    'gemini-3.1-flash-lite-preview',
-    'gemini-2.0-flash',
-    'gemini-2.0-flash-lite',
-  ].filter((m, i, arr) => arr.indexOf(m) === i);
+  // Умная очередь — если слишком много запросов подряд, ждём
+  const now = Date.now();
+  if (!window._geminiLastCall) window._geminiLastCall = 0;
+  if (!window._geminiFailStreak) window._geminiFailStreak = 0;
+
+  // Минимум 3 сек между запросами (бесплатный tier: 15 rpm = 4 сек)
+  const timeSinceLast = now - window._geminiLastCall;
+  if (timeSinceLast < 3000) {
+    await sleep(3000 - timeSinceLast);
+  }
+  window._geminiLastCall = Date.now();
 
   const useWebSearch = document.getElementById('aiBotWebSearch')?.checked
     || localStorage.getItem('aiBotWebSearch') === 'true';
 
-  // Google Search Grounding — только для flash моделей (не lite)
-  const modelSupportsSearch = primaryModel.includes('2.0-flash') && !primaryModel.includes('lite');
-  const enableSearch = useWebSearch && modelSupportsSearch;
-  if (useWebSearch && !modelSupportsSearch) aiBotLog('Поиск недоступен для этой модели, нужна gemini-2.0-flash', 'info');
+  // Веб-поиск только на flash без lite
+  const searchCapable = primaryModel === 'gemini-2.0-flash' || primaryModel === 'gemini-1.5-flash';
+  const enableSearch = useWebSearch && searchCapable;
+  if (useWebSearch && !searchCapable) aiBotLog('🌐 Поиск: нужна gemini-2.0-flash', 'info');
 
-  const payload = {
+  // Payload без поиска (поиск добавляем только для первой попытки с flash)
+  const basePayload = {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents: aiBot.chatHistory,
     generationConfig: { maxOutputTokens: 120, temperature: emotionInfo.temp },
-    ...(enableSearch ? { tools: [{ googleSearch: {} }] } : {})
   };
-  if (enableSearch) aiBotLog('🌐 Поиск в интернете включён', 'info');
 
-  let data, lastErr, usedModel;
-  for (const model of modelFallback) {
-    for (let attempt = 1; attempt <= 2; attempt++) {
+  let data, usedModel;
+
+  // Одна попытка на модель, без двойных ретраев при перегрузке — сразу следующая
+  for (let mi = 0; mi < modelFallback.length; mi++) {
+    const model = modelFallback[mi];
+    const withSearch = enableSearch && (model === 'gemini-2.0-flash' || model === 'gemini-1.5-flash');
+    const payload = withSearch
+      ? { ...basePayload, tools: [{ googleSearch: {} }] }
+      : basePayload;
+
+    if (withSearch) aiBotLog('🌐 Поиск в интернете активен', 'info');
+
+    // Таймаут: с поиском 25 сек, без — 15 сек
+    const timeoutMs = withSearch ? 25000 : 15000;
+
+    try {
+      aiBotLog(`Запрос: ${model}${withSearch ? ' + поиск' : ''}...`, 'info');
+
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), timeoutMs);
+      let res;
       try {
-        aiBotLog(`Запрос: ${model} (попытка ${attempt})...`, 'info');
+        res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload), signal: controller.signal }
+        );
+      } finally { clearTimeout(tid); }
 
-        // Таймаут 12 секунд — если нет ответа, пробуем следующую модель
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 12000);
+      data = await res.json();
 
-        let res;
-        try {
-          res = await fetch(
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal: controller.signal }
-          );
-        } finally {
-          clearTimeout(timeoutId);
-        }
-
-        data = await res.json();
-        const isOverload = res.status === 503 || res.status === 429
-          || data.error?.message?.includes('high demand')
-          || data.error?.message?.includes('overloaded')
-          || data.error?.message?.includes('quota');
-        if (isOverload) {
-          aiBotLog(`${model} перегружена, жду ${attempt * 2}с...`, 'info');
-          await sleep(attempt * 2000);
-          continue;
-        }
-        if (!res.ok) throw new Error(data.error?.message || `HTTP ${res.status}`);
-        usedModel = model;
-        lastErr = null;
-        break;
-      } catch(e) {
-        if (e.name === 'AbortError') {
-          aiBotLog(`${model} не ответила за 12с, пробую следующую...`, 'info');
-        } else {
-          lastErr = e;
-          aiBotLog(`${model} ошибка: ${e.message}`, 'info');
-        }
-        await sleep(1000);
+      // Перегрузка / rate limit — ждём и пробуем следующую модель
+      if (res.status === 429 || res.status === 503 ||
+          data.error?.message?.toLowerCase().match(/overload|quota|high demand|resource/)) {
+        window._geminiFailStreak++;
+        const wait = Math.min(3000 * window._geminiFailStreak, 10000);
+        aiBotLog(`${model} перегружена, жду ${wait/1000}с...`, 'info');
+        await sleep(wait);
+        continue;
       }
+
+      if (!res.ok) {
+        aiBotLog(`${model}: ${data.error?.message || 'HTTP ' + res.status}`, 'info');
+        continue;
+      }
+
+      usedModel = model;
+      window._geminiFailStreak = 0;
+      break;
+
+    } catch(e) {
+      if (e.name === 'AbortError') {
+        aiBotLog(`${model} таймаут (>${timeoutMs/1000}с), следующая...`, 'info');
+      } else {
+        aiBotLog(`${model}: ${e.message}`, 'info');
+      }
+      // Пауза перед следующей моделью
+      if (mi < modelFallback.length - 1) await sleep(1500);
     }
-    if (usedModel) break;
+  }
+
+  if (!usedModel) {
+    window._geminiFailStreak++;
+    aiBotLog('Все модели недоступны. Следующий запрос через ~30с.', 'err');
+    window._geminiLastCall = Date.now() + 27000;
+    aiBot.chatHistory.pop();
+    return;
   }
 
   try {
-    if (!usedModel) throw new Error(lastErr?.message || 'Все модели недоступны');
     if (!data || data.error) throw new Error(data?.error?.message || 'Нет ответа');
 
     let reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
@@ -2943,7 +2968,8 @@ async function trainOnChatLog(input) {
   const rulesAnalysis = await geminiAnalyze(key, model, `Ты обучаешь AI бота для Twitch чата. Вот последние сообщения:\n${allSample}\n\nНапиши конкретные правила как бот должен общаться в ЭТОМ чате:\n1. Какие фразы и слова использовать\n2. Какой длины должны быть ответы\n3. Как реагировать на хайповые моменты\n4. Как отвечать на вопросы\n5. Что звучало бы естественно для этого чата, а что нет\n6. Примеры идеальных ответов в стиле этого чата\nПиши как инструкцию, конкретно.`, 600);
 
   if (!styleAnalysis && !behaviorAnalysis && !rulesAnalysis) {
-    setTrainStatus('Ошибка — все запросы к Gemini провалились. Проверь API ключ.');
+    setTrainStatus('❌ Все запросы к Gemini провалились. Проверь API ключ и модель в настройках.');
+    showTrainProgress(false);
     input.value = '';
     return;
   }
@@ -2952,55 +2978,72 @@ async function trainOnChatLog(input) {
   setTrainProgress(85, 'Сохраняю в память...');
 
   const date = new Date().toLocaleDateString('ru');
-  const header = `[ОБУЧЕНИЕ ${date} "${file.name}" ${messages.length} сообщ, топ: ${topUsers}]`;
+  const header = `[ЧАТ "${file.name}" ${date}, ${messages.length} сообщ]`;
 
-  // Очищаем старые записи этого файла если есть
+  // Очищаем старые записи этого файла
   aiBot.longMemory = aiBot.longMemory.filter(m => !m.includes(`"${file.name}"`));
 
-  if (styleAnalysis) aiBot.longMemory.push(`${header} СТИЛЬ: ${styleAnalysis}`);
-  if (behaviorAnalysis) aiBot.longMemory.push(`${header} ПОВЕДЕНИЕ: ${behaviorAnalysis}`);
-  if (rulesAnalysis) aiBot.longMemory.push(`${header} ПРАВИЛА: ${rulesAnalysis}`);
+  if (styleAnalysis) aiBot.longMemory.push(`${header} СТИЛЬ И СЛЕНГ:\n${styleAnalysis}`);
+  if (behaviorAnalysis) aiBot.longMemory.push(`${header} ПОВЕДЕНИЕ ЗРИТЕЛЕЙ:\n${behaviorAnalysis}`);
+  if (rulesAnalysis) aiBot.longMemory.push(`${header} КАК ОБЩАТЬСЯ:\n${rulesAnalysis}`);
 
-  // Извлекаем конкретные фразы для streamerPatterns
+  // Сохраняем случайные реальные фразы из чата как паттерны
   const phrases = messages
     .map(m => m.text)
-    .filter(t => t.length > 3 && t.length < 40)
+    .filter(t => t.length > 3 && t.length < 50 && !/^http/.test(t))
     .sort(() => Math.random() - 0.5)
-    .slice(0, 20);
+    .slice(0, 30);
   if (phrases.length) {
-    aiBot.streamerPatterns = [...(aiBot.streamerPatterns || []), ...phrases].slice(-30);
+    aiBot.streamerPatterns = [...(aiBot.streamerPatterns || []), ...phrases].slice(-50);
     try { localStorage.setItem('aiBotStreamerPatterns', JSON.stringify(aiBot.streamerPatterns)); } catch(e) {}
   }
 
+  // Лимит памяти — 50 записей
+  if (aiBot.longMemory.length > 50) aiBot.longMemory = aiBot.longMemory.slice(-50);
   saveLongMemory();
 
   const saved = [styleAnalysis, behaviorAnalysis, rulesAnalysis].filter(Boolean).length;
   setTrainProgress(100, '');
-  setTrainStatus(`Готово. ${messages.length} сообщений → ${saved} блоков памяти сохранено.`);
-  aiBotLog(`Обучение "${file.name}": ${saved} блоков в память`, 'ok');
+  setTrainStatus(`✅ Готово. ${messages.length} сообщений → ${saved} блока знаний сохранено. Бот теперь знает стиль этого чата.`);
+  aiBotLog(`Обучение "${file.name}": ${saved}/3 блоков → память (${aiBot.longMemory.length} записей)`, 'ok');
   toast(`Обучение завершено! ${saved} блока знаний`, 'success', 6000);
   input.value = '';
 }
 
-// Хелпер — один запрос к Gemini с обработкой ошибок
-async function geminiAnalyze(key, model, prompt, maxTokens = 400) {
-  try {
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 20000);
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { maxOutputTokens: maxTokens, temperature: 0.2 } }) }
-    );
-    clearTimeout(tid);
-    const data = await res.json();
-    if (data.error) { aiBotLog(`Gemini: ${data.error.message}`, 'err'); return null; }
-    return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
-  } catch(e) {
-    aiBotLog(`Ошибка запроса: ${e.message}`, 'err');
-    return null;
+// Хелпер — один запрос к Gemini с retry и fallback моделью
+async function geminiAnalyze(key, promptModel, prompt, maxTokens = 400) {
+  const fallbacks = [promptModel, 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash']
+    .filter((m, i, a) => a.indexOf(m) === i);
+
+  for (const model of fallbacks) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const controller = new AbortController();
+        const tid = setTimeout(() => controller.abort(), 25000);
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }],
+              generationConfig: { maxOutputTokens: maxTokens, temperature: 0.2 } }) }
+        );
+        clearTimeout(tid);
+        const data = await res.json();
+        if (res.status === 503 || res.status === 429 || data.error?.message?.includes('overloaded')) {
+          aiBotLog(`${model} перегружена, жду...`, 'info');
+          await sleep(attempt * 3000);
+          continue;
+        }
+        if (data.error) { aiBotLog(`Gemini ошибка (${model}): ${data.error.message}`, 'err'); break; }
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+        if (text) { aiBotLog(`✓ ${model} ответила (${text.length} симв)`, 'ok'); return text; }
+      } catch(e) {
+        if (e.name === 'AbortError') aiBotLog(`${model} таймаут, пробую следующую...`, 'info');
+        else aiBotLog(`Ошибка: ${e.message}`, 'err');
+        await sleep(1500);
+      }
+    }
   }
+  return null;
 }
 
 // Наблюдение за живым каналом
