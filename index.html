@@ -522,7 +522,8 @@
               <select class="queue-select" id="aiBotModel" style="width:100%">
                 <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (быстрый, бесплатный)</option>
                 <option value="gemini-2.0-flash">gemini-2.0-flash (умнее, поиск)</option>
-                <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                <option value="gemini-2.5-flash-preview-05-20">gemini-2.5-flash-preview (мощный)</option>
+                <option value="gemini-2.5-pro-preview-06-05">gemini-2.5-pro-preview (максимум)</option>
               </select>
             </div>
 
@@ -531,7 +532,7 @@
                 <input type="checkbox" id="aiBotWebSearch" style="accent-color:var(--purple);width:14px;height:14px">
                 <span>🌐 Поиск в интернете</span>
               </label>
-              <div class="form-hint">Бот сможет гуглить актуальную инфу (патчи, новости, игры). Работает с gemini-2.0-flash и gemini-2.0-flash-lite</div>
+              <div class="form-hint">Бот сможет гуглить актуальную инфу (патчи, новости, игры). Работает с gemini-2.0-flash, gemini-2.0-flash-lite и gemini-2.5</div>
             </div>
 
             <div class="form-field">
@@ -1989,8 +1990,8 @@ function loadLongMemory() {
 
 function saveLongMemory() {
   try {
-    // Держим максимум 30 фактов
-    if (aiBot.longMemory.length > 30) aiBot.longMemory = aiBot.longMemory.slice(-30);
+    // Держим максимум 40 фактов
+    if (aiBot.longMemory.length > 40) aiBot.longMemory = aiBot.longMemory.slice(-40);
     localStorage.setItem('aiBotLongMemory', JSON.stringify(aiBot.longMemory));
   } catch(e) {}
 }
@@ -2528,7 +2529,7 @@ ${longMemStr}${streamerStyle}${gameNote}
     primaryModel,
     'gemini-2.0-flash-lite',
     'gemini-2.0-flash',
-    'gemini-1.5-flash',
+    'gemini-2.5-flash-preview-05-20',
   ].filter((m, i, arr) => arr.indexOf(m) === i);
 
   let data, usedModel;
@@ -2884,7 +2885,7 @@ async function runMemoryTest() {
   btn.textContent = '...';
   btn.disabled = true;
 
-  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
 
   // Собираем всю память
   const allMem = aiBot.longMemory.join('\n');
@@ -2980,7 +2981,7 @@ async function trainOnChatLog(input) {
     return;
   }
 
-  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
   aiBotLog(`Обучение: ${messages.length} сообщений из "${file.name}"`, 'info');
 
   // Собираем статистику по юзерам
@@ -3035,8 +3036,8 @@ async function trainOnChatLog(input) {
     try { localStorage.setItem('aiBotStreamerPatterns', JSON.stringify(aiBot.streamerPatterns)); } catch(e) {}
   }
 
-  // Лимит памяти — 50 записей
-  if (aiBot.longMemory.length > 50) aiBot.longMemory = aiBot.longMemory.slice(-50);
+  // Лимит памяти — 40 записей (в sync с saveLongMemory)
+  if (aiBot.longMemory.length > 40) aiBot.longMemory = aiBot.longMemory.slice(-40);
   saveLongMemory();
 
   const saved = [styleAnalysis, behaviorAnalysis, rulesAnalysis].filter(Boolean).length;
@@ -3049,7 +3050,7 @@ async function trainOnChatLog(input) {
 
 // Хелпер — один запрос к Gemini с retry и fallback моделью
 async function geminiAnalyze(key, promptModel, prompt, maxTokens = 400) {
-  const fallbacks = [promptModel, 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash']
+  const fallbacks = [promptModel, 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.5-flash-preview-05-20']
     .filter((m, i, a) => a.indexOf(m) === i);
 
   for (const model of fallbacks) {
@@ -3140,7 +3141,7 @@ async function analyzeWatchedChat(channel) {
   const key = localStorage.getItem('aiBotGeminiKey');
   if (!key) return;
 
-  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
   const count = _trainMsgs.length;
   aiBotLog(`Анализирую ${count} сообщений из #${channel}...`, 'info');
 
