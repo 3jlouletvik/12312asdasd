@@ -520,9 +520,8 @@
             <div class="form-field">
               <label>Модель Gemini</label>
               <select class="queue-select" id="aiBotModel" style="width:100%">
-                <option value="gemini-3.1-flash-lite-preview">gemini-3.1-flash-lite-preview (дефолт)</option>
-                <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-                <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite</option>
+                <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (быстрый, бесплатный)</option>
+                <option value="gemini-2.0-flash">gemini-2.0-flash (умнее, поиск)</option>
                 <option value="gemini-1.5-flash">gemini-1.5-flash</option>
               </select>
             </div>
@@ -532,7 +531,7 @@
                 <input type="checkbox" id="aiBotWebSearch" style="accent-color:var(--purple);width:14px;height:14px">
                 <span>🌐 Поиск в интернете</span>
               </label>
-              <div class="form-hint">Бот сможет гуглить актуальную инфу (патчи, новости, игры). Только для gemini-2.0-flash+</div>
+              <div class="form-hint">Бот сможет гуглить актуальную инфу (патчи, новости, игры). Работает с gemini-2.0-flash и gemini-2.0-flash-lite</div>
             </div>
 
             <div class="form-field">
@@ -2008,7 +2007,7 @@ async function extractMemory() {
   if (aiBot.chatHistory.length < 3) return;
   const key = localStorage.getItem('aiBotGeminiKey');
   if (!key) return;
-  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
 
   // Собираем только текстовые части истории (без скриншотов)
   const historyText = aiBot.chatHistory.map(h => {
@@ -2503,7 +2502,7 @@ ${longMemStr}${streamerStyle}${gameNote}
 
   const primaryModel = document.getElementById('aiBotModel')?.value
     || localStorage.getItem('aiBotModel')
-    || 'gemini-3.1-flash-lite-preview';
+    || 'gemini-2.0-flash-lite';
 
   // Rate limiting
   if (!window._geminiLastCall) window._geminiLastCall = 0;
@@ -2515,36 +2514,21 @@ ${longMemStr}${streamerStyle}${gameNote}
   const useWebSearch = document.getElementById('aiBotWebSearch')?.checked
     || localStorage.getItem('aiBotWebSearch') === 'true';
 
-  // --- ВЕБ-ПОИСК через DuckDuckGo (работает с любой моделью, без доп. API ключей) ---
-  let searchContext = '';
-  if (useWebSearch && triggerMsg?.text) {
-    // Определяем нужен ли поиск по содержимому вопроса
-    const needsSearch = /кто|что|где|когда|как|почему|сколько|билд|гайд|стримера|знаешь|расскажи|слышал|новост|патч|обнов|топ|лучш|мета|рейт/i.test(triggerMsg.text);
-    if (needsSearch) {
-      searchContext = await fetchWebSearch(triggerMsg.text);
-      if (searchContext) aiBotLog(`🌐 Нашёл инфу в интернете`, 'ok');
-    }
-  }
-
-  // Если есть результаты поиска — добавляем в запрос
-  if (searchContext) {
-    const lastPart = aiBot.chatHistory[aiBot.chatHistory.length - 1];
-    const textPart = lastPart?.parts?.find(p => p.text);
-    if (textPart) textPart.text = `[ИЗ ИНТЕРНЕТА НАЙДЕНО: ${searchContext}]\n\n` + textPart.text;
-  }
+  if (useWebSearch) aiBotLog('🌐 Поиск включён', 'info');
 
   const basePayload = {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents: aiBot.chatHistory,
     generationConfig: { maxOutputTokens: 120, temperature: emotionInfo.temp },
+    ...(useWebSearch ? { tools: [{ googleSearch: {} }] } : {}),
   };
 
   // Fallback: основная → lite → flash
   const modelFallback2 = [
     primaryModel,
-    'gemini-3.1-flash-lite-preview',
     'gemini-2.0-flash-lite',
     'gemini-2.0-flash',
+    'gemini-1.5-flash',
   ].filter((m, i, arr) => arr.indexOf(m) === i);
 
   let data, usedModel;
