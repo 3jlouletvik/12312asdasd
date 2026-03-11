@@ -2505,51 +2505,56 @@ ${longMemStr}${streamerStyle}${gameNote}
     || localStorage.getItem('aiBotModel')
     || 'gemini-3.1-flash-lite-preview';
 
-  // Умная очередь — если слишком много запросов подряд, ждём
-  const now = Date.now();
+  // Rate limiting
   if (!window._geminiLastCall) window._geminiLastCall = 0;
   if (!window._geminiFailStreak) window._geminiFailStreak = 0;
-
-  // Минимум 3 сек между запросами (бесплатный tier: 15 rpm = 4 сек)
-  const timeSinceLast = now - window._geminiLastCall;
-  if (timeSinceLast < 3000) {
-    await sleep(3000 - timeSinceLast);
-  }
+  const timeSinceLast = Date.now() - window._geminiLastCall;
+  if (timeSinceLast < 3000) await sleep(3000 - timeSinceLast);
   window._geminiLastCall = Date.now();
 
   const useWebSearch = document.getElementById('aiBotWebSearch')?.checked
     || localStorage.getItem('aiBotWebSearch') === 'true';
 
-  // Веб-поиск только на flash без lite
-  const searchCapable = primaryModel === 'gemini-2.0-flash' || primaryModel === 'gemini-1.5-flash';
-  const enableSearch = useWebSearch && searchCapable;
-  if (useWebSearch && !searchCapable) aiBotLog('🌐 Поиск: нужна gemini-2.0-flash', 'info');
+  // --- ВЕБ-ПОИСК через DuckDuckGo (работает с любой моделью, без доп. API ключей) ---
+  let searchContext = '';
+  if (useWebSearch && triggerMsg?.text) {
+    // Определяем нужен ли поиск по содержимому вопроса
+    const needsSearch = /кто|что|где|когда|как|почему|сколько|билд|гайд|стримера|знаешь|расскажи|слышал|новост|патч|обнов|топ|лучш|мета|рейт/i.test(triggerMsg.text);
+    if (needsSearch) {
+      searchContext = await fetchWebSearch(triggerMsg.text);
+      if (searchContext) aiBotLog(`🌐 Нашёл инфу в интернете`, 'ok');
+    }
+  }
 
-  // Payload без поиска (поиск добавляем только для первой попытки с flash)
+  // Если есть результаты поиска — добавляем в запрос
+  if (searchContext) {
+    const lastPart = aiBot.chatHistory[aiBot.chatHistory.length - 1];
+    const textPart = lastPart?.parts?.find(p => p.text);
+    if (textPart) textPart.text = `[ИЗ ИНТЕРНЕТА НАЙДЕНО: ${searchContext}]\n\n` + textPart.text;
+  }
+
   const basePayload = {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents: aiBot.chatHistory,
     generationConfig: { maxOutputTokens: 120, temperature: emotionInfo.temp },
   };
 
+  // Fallback: основная → lite → flash
+  const modelFallback2 = [
+    primaryModel,
+    'gemini-3.1-flash-lite-preview',
+    'gemini-2.0-flash-lite',
+    'gemini-2.0-flash',
+  ].filter((m, i, arr) => arr.indexOf(m) === i);
+
   let data, usedModel;
 
-  // Одна попытка на модель, без двойных ретраев при перегрузке — сразу следующая
-  for (let mi = 0; mi < modelFallback.length; mi++) {
-    const model = modelFallback[mi];
-    const withSearch = enableSearch && (model === 'gemini-2.0-flash' || model === 'gemini-1.5-flash');
-    const payload = withSearch
-      ? { ...basePayload, tools: [{ googleSearch: {} }] }
-      : basePayload;
-
-    if (withSearch) aiBotLog('🌐 Поиск в интернете активен', 'info');
-
-    // Таймаут: с поиском 25 сек, без — 15 сек
-    const timeoutMs = withSearch ? 25000 : 15000;
+  for (let mi = 0; mi < modelFallback2.length; mi++) {
+    const model = modelFallback2[mi];
+    const timeoutMs = 20000;
 
     try {
-      aiBotLog(`Запрос: ${model}${withSearch ? ' + поиск' : ''}...`, 'info');
-
+      aiBotLog(`Запрос: ${model}...`, 'info');
       const controller = new AbortController();
       const tid = setTimeout(() => controller.abort(), timeoutMs);
       let res;
@@ -2557,45 +2562,36 @@ ${longMemStr}${streamerStyle}${gameNote}
         res = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
           { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload), signal: controller.signal }
+            body: JSON.stringify(basePayload), signal: controller.signal }
         );
       } finally { clearTimeout(tid); }
 
       data = await res.json();
 
-      // Перегрузка / rate limit — ждём и пробуем следующую модель
       if (res.status === 429 || res.status === 503 ||
           data.error?.message?.toLowerCase().match(/overload|quota|high demand|resource/)) {
         window._geminiFailStreak++;
-        const wait = Math.min(3000 * window._geminiFailStreak, 10000);
+        const wait = Math.min(2000 * window._geminiFailStreak, 8000);
         aiBotLog(`${model} перегружена, жду ${wait/1000}с...`, 'info');
         await sleep(wait);
         continue;
       }
 
-      if (!res.ok) {
-        aiBotLog(`${model}: ${data.error?.message || 'HTTP ' + res.status}`, 'info');
-        continue;
-      }
+      if (!res.ok) { aiBotLog(`${model}: ${data.error?.message || 'HTTP '+res.status}`, 'info'); continue; }
 
       usedModel = model;
       window._geminiFailStreak = 0;
       break;
-
     } catch(e) {
-      if (e.name === 'AbortError') {
-        aiBotLog(`${model} таймаут (>${timeoutMs/1000}с), следующая...`, 'info');
-      } else {
-        aiBotLog(`${model}: ${e.message}`, 'info');
-      }
-      // Пауза перед следующей моделью
-      if (mi < modelFallback.length - 1) await sleep(1500);
+      if (e.name === 'AbortError') aiBotLog(`${model} таймаут, следующая...`, 'info');
+      else aiBotLog(`${model}: ${e.message}`, 'info');
+      if (mi < modelFallback2.length - 1) await sleep(1000);
     }
   }
 
   if (!usedModel) {
     window._geminiFailStreak++;
-    aiBotLog('Все модели недоступны. Следующий запрос через ~30с.', 'err');
+    aiBotLog('Все модели недоступны, пауза 30с', 'err');
     window._geminiLastCall = Date.now() + 27000;
     aiBot.chatHistory.pop();
     return;
@@ -2647,6 +2643,63 @@ ${longMemStr}${streamerStyle}${gameNote}
 }
 
 // Анализ контекста игры из чата
+// ── ВЕБ-ПОИСК через DuckDuckGo (бесплатно, без ключей) ──
+async function fetchWebSearch(query) {
+  try {
+    // Чистим запрос — убираем обращение к боту
+    const nick = localStorage.getItem('aiBotNick') || '';
+    const cleanQuery = query
+      .replace(new RegExp(nick, 'gi'), '')
+      .replace(/^(ну|ей|эй|привет|хэй)\s+/gi, '')
+      .trim();
+
+    if (cleanQuery.length < 4) return '';
+
+    aiBotLog(`🔍 Ищу: "${cleanQuery}"`, 'info');
+
+    // DuckDuckGo Instant Answer API — работает через CORS прокси
+    const encoded = encodeURIComponent(cleanQuery);
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 8000);
+
+    const res = await fetch(
+      `https://api.duckduckgo.com/?q=${encoded}&format=json&no_redirect=1&no_html=1&skip_disambig=1`,
+      { signal: controller.signal }
+    );
+
+    if (!res.ok) return '';
+    const data = await res.json();
+
+    const parts = [];
+
+    // AbstractText — основной ответ (Википедия и тп)
+    if (data.AbstractText?.length > 20) {
+      parts.push(data.AbstractText.slice(0, 300));
+    }
+
+    // Answer — быстрый факт
+    if (data.Answer?.length > 5) {
+      parts.push(data.Answer.slice(0, 150));
+    }
+
+    // RelatedTopics — связанные темы
+    if (!parts.length && data.RelatedTopics?.length) {
+      const topics = data.RelatedTopics
+        .filter(t => t.Text)
+        .slice(0, 3)
+        .map(t => t.Text.slice(0, 100));
+      if (topics.length) parts.push(...topics);
+    }
+
+    if (!parts.length) return '';
+
+    return parts.join(' | ').slice(0, 500);
+  } catch(e) {
+    // Тихо — поиск опциональный, не ломаем основной запрос
+    return '';
+  }
+}
+
 function detectGameContext(msgs) {
   const text = msgs.map(m => m.text).join(' ').toLowerCase();
   const hints = [];
