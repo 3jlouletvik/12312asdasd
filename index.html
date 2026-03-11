@@ -2416,10 +2416,23 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
   // Долгосрочная память — разделяем обучение и сессионные наблюдения
   let longMemStr = '';
   if (aiBot.longMemory.length) {
-    const trainMem = aiBot.longMemory.filter(m => m.includes('[ОБУЧЕНИЕ') || m.includes('[НАБЛЮДЕНИЕ') || m.includes('[ЧАТ стиль') || m.includes('[стиль стримера'));
+    const trainMem = aiBot.longMemory.filter(m =>
+      m.includes('[ОБУЧЕНИЕ') || m.includes('[НАБЛЮДЕНИЕ') || m.includes('[ЧАТ стиль') || m.includes('[стиль стримера'));
     const sessionMem = aiBot.longMemory.filter(m => !trainMem.includes(m));
-    if (trainMem.length) longMemStr += `\nКАК ОБЩАЕТСЯ ЭТОТ ЧАТ:\n${trainMem.slice(-4).join('\n')}\n`;
-    if (sessionMem.length) longMemStr += `\nЧТО ТЫ ЗНАЕШЬ ИЗ ПРОШЛЫХ СЕССИЙ:\n${sessionMem.slice(-8).join('\n')}\n`;
+
+    if (trainMem.length) {
+      // Вытаскиваем ПРАВИЛА из обучения — самое важное
+      const rules = trainMem.filter(m => m.includes('ПРАВИЛА:'));
+      const styles = trainMem.filter(m => m.includes('СТИЛЬ:'));
+      const behavior = trainMem.filter(m => m.includes('ПОВЕДЕНИЕ:'));
+
+      if (rules.length) longMemStr += `\nКАК ОБЩАТЬСЯ В ЭТОМ ЧАТЕ (из обучения):\n${rules.map(m => m.split('ПРАВИЛА:')[1] || m).join('\n').slice(0, 600)}\n`;
+      if (styles.length) longMemStr += `\nСТИЛЬ И СЛЕНГ ЭТОГО ЧАТА:\n${styles.map(m => m.split('СТИЛЬ:')[1] || m).join('\n').slice(0, 400)}\n`;
+      if (behavior.length) longMemStr += `\nПОВЕДЕНИЕ ЗРИТЕЛЕЙ:\n${behavior.map(m => m.split('ПОВЕДЕНИЕ:')[1] || m).join('\n').slice(0, 300)}\n`;
+    }
+    if (sessionMem.length) {
+      longMemStr += `\nИЗ ПРОШЛЫХ СЕССИЙ:\n${sessionMem.slice(-6).join('\n')}\n`;
+    }
   }
 
   // Контекст игры — анализируем последние сообщения чата на тему игры
@@ -2502,12 +2515,18 @@ ${longMemStr}${streamerStyle}${gameNote}
   const useWebSearch = document.getElementById('aiBotWebSearch')?.checked
     || localStorage.getItem('aiBotWebSearch') === 'true';
 
+  // Google Search Grounding — только для flash моделей (не lite)
+  const modelSupportsSearch = primaryModel.includes('2.0-flash') && !primaryModel.includes('lite');
+  const enableSearch = useWebSearch && modelSupportsSearch;
+  if (useWebSearch && !modelSupportsSearch) aiBotLog('Поиск недоступен для этой модели, нужна gemini-2.0-flash', 'info');
+
   const payload = {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents: aiBot.chatHistory,
     generationConfig: { maxOutputTokens: 120, temperature: emotionInfo.temp },
-    ...(useWebSearch ? { tools: [{ google_search: {} }] } : {})
+    ...(enableSearch ? { tools: [{ googleSearch: {} }] } : {})
   };
+  if (enableSearch) aiBotLog('🌐 Поиск в интернете включён', 'info');
 
   let data, lastErr, usedModel;
   for (const model of modelFallback) {
@@ -2868,71 +2887,120 @@ async function trainOnChatLog(input) {
 
   setTrainStatus(`Читаю ${file.name}...`);
   showTrainProgress(true);
-  setTrainProgress(5, '');
+  setTrainProgress(5, 'Парсинг файла...');
 
   const text = await file.text();
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   const messages = [];
 
   for (const line of lines) {
+    // Много форматов логов
     const patterns = [
       /^\[[\d:]+\]\s+(\w+):\s+(.+)$/,
-      /^\[[\d\-: ]+\]\s+#\w+\s+(\w+):\s+(.+)$/,
-      /^(\w+):\s+(.+)$/,
+      /^\[[\d\-: TZ]+\]\s+#?\w+\s+(\w+):\s+(.+)$/,
       /^\[[\d:]+\]\s+<(\w+)>\s+(.+)$/,
       /^#\w+\s+\[[\d:T\-Z]+\]\s+(\w+):\s+(.+)$/,
+      /^(\w{2,25}):\s+(.{1,500})$/,
     ];
     for (const re of patterns) {
       const m = line.match(re);
-      if (m && m[1].length < 30) { messages.push({ user: m[1], text: m[2] }); break; }
+      if (m && m[1].length < 30 && !['http','https','www'].includes(m[1])) {
+        messages.push({ user: m[1].toLowerCase(), text: m[2] });
+        break;
+      }
     }
   }
 
-  if (messages.length < 10) {
-    setTrainStatus(`Не удалось распознать формат — нашлось только ${messages.length} сообщений`);
+  if (messages.length < 5) {
+    setTrainStatus(`Не смог распознать формат. Строк: ${lines.length}, сообщений: ${messages.length}. Покажи пример строки из файла.`);
     showTrainProgress(false);
     input.value = '';
     return;
   }
 
-  setTrainStatus(`Найдено ${messages.length} сообщений, анализирую...`);
   const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
-  const chunkSize = 250;
-  const chunks = [];
-  for (let i = 0; i < messages.length; i += chunkSize) chunks.push(messages.slice(i, i + chunkSize));
+  aiBotLog(`Обучение: ${messages.length} сообщений из "${file.name}"`, 'info');
 
-  const insights = [];
-  for (let i = 0; i < Math.min(chunks.length, 4); i++) {
-    setTrainProgress(10 + (i / Math.min(chunks.length, 4)) * 80, `Часть ${i+1}/${Math.min(chunks.length, 4)}...`);
-    const sample = chunks[i].map(m => `${m.user}: ${m.text}`).join('\n');
-    try {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text:
-            `Сообщения из Twitch чата:\n${sample}\n\nВыдели коротко:\n1. Стиль и тон общения\n2. Характерные слова и фразы\n3. Как реагируют на стримера\n4. Сленг этого чата`
-          }]}], generationConfig: { maxOutputTokens: 200, temperature: 0.3 } })
-        }
-      );
-      const data = await res.json();
-      const ins = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-      if (ins) insights.push(ins);
-    } catch(e) {}
-    await sleep(600);
+  // Собираем статистику по юзерам
+  const userFreq = {};
+  messages.forEach(m => { userFreq[m.user] = (userFreq[m.user] || 0) + 1; });
+  const topUsers = Object.entries(userFreq).sort((a,b) => b[1]-a[1]).slice(0, 10).map(([u,c]) => `${u}(${c})`).join(', ');
+
+  // --- ПРОХОД 1: Словарь и стиль ---
+  setTrainProgress(15, 'Анализ стиля и сленга...');
+  const sample1 = messages.slice(0, 300).map(m => m.text).join('\n');
+  const styleAnalysis = await geminiAnalyze(key, model, `Вот сообщения из Twitch чата:\n${sample1}\n\nПроведи детальный анализ:\n1. Характерные слова, фразы, мемы этого чата (минимум 10-15 примеров)\n2. Как сокращают слова, какой сленг используют\n3. Эмоциональный тон чата\n4. Как обращаются к стримеру\n5. Типичная структура сообщений (короткие/длинные, вопросы/восклицания)\nБудь конкретен, приводи реальные примеры из текста.`, 500);
+
+  // --- ПРОХОД 2: Паттерны поведения ---
+  setTrainProgress(35, 'Анализ паттернов поведения...');
+  const mid = Math.floor(messages.length / 2);
+  const sample2 = messages.slice(mid, mid + 300).map(m => `${m.user}: ${m.text}`).join('\n');
+  const behaviorAnalysis = await geminiAnalyze(key, model, `Twitch чат:\n${sample2}\n\nАнализ поведения зрителей:\n1. На что реагируют сильнее всего (что вызывает много ответов)\n2. Какие темы поднимают сами зрители\n3. Как шутят и подкалывают\n4. Что никогда не пишут (табу этого чата)\n5. Примеры реальных хороших ответов из этого чата\nТолько конкретика с примерами.`, 500);
+
+  // --- ПРОХОД 3: Финальный синтез — правила для бота ---
+  setTrainProgress(60, 'Синтез правил для бота...');
+  const allSample = messages.slice(-200).map(m => `${m.user}: ${m.text}`).join('\n');
+  const rulesAnalysis = await geminiAnalyze(key, model, `Ты обучаешь AI бота для Twitch чата. Вот последние сообщения:\n${allSample}\n\nНапиши конкретные правила как бот должен общаться в ЭТОМ чате:\n1. Какие фразы и слова использовать\n2. Какой длины должны быть ответы\n3. Как реагировать на хайповые моменты\n4. Как отвечать на вопросы\n5. Что звучало бы естественно для этого чата, а что нет\n6. Примеры идеальных ответов в стиле этого чата\nПиши как инструкцию, конкретно.`, 600);
+
+  if (!styleAnalysis && !behaviorAnalysis && !rulesAnalysis) {
+    setTrainStatus('Ошибка — все запросы к Gemini провалились. Проверь API ключ.');
+    input.value = '';
+    return;
   }
 
-  if (!insights.length) { setTrainStatus('Ошибка анализа — проверь API ключ'); input.value = ''; return; }
+  // --- Сохраняем всё в память ---
+  setTrainProgress(85, 'Сохраняю в память...');
 
-  setTrainProgress(95, 'Сохраняю в память...');
-  aiBot.longMemory.push(`[ОБУЧЕНИЕ "${file.name}", ${messages.length} сообщений]: ${insights[0].slice(0, 300)}`);
-  insights.slice(1).forEach((ins, i) => aiBot.longMemory.push(`[ЧАТ стиль ${i+2}]: ${ins.slice(0, 200)}`));
+  const date = new Date().toLocaleDateString('ru');
+  const header = `[ОБУЧЕНИЕ ${date} "${file.name}" ${messages.length} сообщ, топ: ${topUsers}]`;
+
+  // Очищаем старые записи этого файла если есть
+  aiBot.longMemory = aiBot.longMemory.filter(m => !m.includes(`"${file.name}"`));
+
+  if (styleAnalysis) aiBot.longMemory.push(`${header} СТИЛЬ: ${styleAnalysis}`);
+  if (behaviorAnalysis) aiBot.longMemory.push(`${header} ПОВЕДЕНИЕ: ${behaviorAnalysis}`);
+  if (rulesAnalysis) aiBot.longMemory.push(`${header} ПРАВИЛА: ${rulesAnalysis}`);
+
+  // Извлекаем конкретные фразы для streamerPatterns
+  const phrases = messages
+    .map(m => m.text)
+    .filter(t => t.length > 3 && t.length < 40)
+    .sort(() => Math.random() - 0.5)
+    .slice(0, 20);
+  if (phrases.length) {
+    aiBot.streamerPatterns = [...(aiBot.streamerPatterns || []), ...phrases].slice(-30);
+    try { localStorage.setItem('aiBotStreamerPatterns', JSON.stringify(aiBot.streamerPatterns)); } catch(e) {}
+  }
+
   saveLongMemory();
 
+  const saved = [styleAnalysis, behaviorAnalysis, rulesAnalysis].filter(Boolean).length;
   setTrainProgress(100, '');
-  setTrainStatus(`Готово. ${messages.length} сообщений проанализировано, ${insights.length} наблюдений в памяти.`);
-  aiBotLog(`Обучение на "${file.name}": ${messages.length} сообщений`, 'ok');
-  toast('Бот обучен на чате!', 'success', 5000);
+  setTrainStatus(`Готово. ${messages.length} сообщений → ${saved} блоков памяти сохранено.`);
+  aiBotLog(`Обучение "${file.name}": ${saved} блоков в память`, 'ok');
+  toast(`Обучение завершено! ${saved} блока знаний`, 'success', 6000);
   input.value = '';
+}
+
+// Хелпер — один запрос к Gemini с обработкой ошибок
+async function geminiAnalyze(key, model, prompt, maxTokens = 400) {
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 20000);
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: maxTokens, temperature: 0.2 } }) }
+    );
+    clearTimeout(tid);
+    const data = await res.json();
+    if (data.error) { aiBotLog(`Gemini: ${data.error.message}`, 'err'); return null; }
+    return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || null;
+  } catch(e) {
+    aiBotLog(`Ошибка запроса: ${e.message}`, 'err');
+    return null;
+  }
 }
 
 // Наблюдение за живым каналом
@@ -2988,34 +3056,44 @@ async function stopTrainWatch() {
 }
 
 async function analyzeWatchedChat(channel) {
-  if (_trainMsgs.length < 10) { setTrainStatus('Мало сообщений'); return; }
+  if (_trainMsgs.length < 10) { setTrainStatus('Мало сообщений для анализа'); return; }
   const key = localStorage.getItem('aiBotGeminiKey');
   if (!key) return;
 
-  setTrainProgress(50, 'Анализирую...');
   const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
-  const sample = _trainMsgs.slice(-300).map(m => `${m.user}: ${m.text}`).join('\n');
+  const count = _trainMsgs.length;
+  aiBotLog(`Анализирую ${count} сообщений из #${channel}...`, 'info');
 
-  try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text:
-          `Живые сообщения из Twitch чата #${channel}:\n${sample}\n\n1. Стиль общения\n2. Характерный сленг\n3. Как реагируют на стримера\n4. Типичные темы\n5. Что тут принято писать`
-        }]}], generationConfig: { maxOutputTokens: 300, temperature: 0.3 } })
-      }
-    );
-    const data = await res.json();
-    const insight = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (insight) {
-      aiBot.longMemory.push(`[НАБЛЮДЕНИЕ #${channel}, ${_trainMsgs.length} сообщ]: ${insight.slice(0, 400)}`);
-      saveLongMemory();
-      setTrainProgress(100, '');
-      setTrainStatus(`Готово. Стиль #${channel} добавлен в память (${_trainMsgs.length} сообщений).`);
-      aiBotLog(`Наблюдение #${channel}: ${_trainMsgs.length} сообщений`, 'ok');
-      toast(`Изучил чат #${channel}!`, 'success', 5000);
-    }
-  } catch(e) { setTrainStatus('Ошибка: ' + e.message); }
+  setTrainProgress(30, 'Анализ стиля...');
+  const sample1 = _trainMsgs.slice(0, 150).map(m => m.text).join('\n');
+  const styleAnalysis = await geminiAnalyze(key, model,
+    `Twitch чат #${channel}:\n${sample1}\n\nСтиль, сленг, характерные фразы (минимум 10 примеров из текста). Тон общения. Как сокращают слова.`, 400);
+
+  setTrainProgress(60, 'Анализ поведения...');
+  const sample2 = _trainMsgs.slice(-150).map(m => `${m.user}: ${m.text}`).join('\n');
+  const rulesAnalysis = await geminiAnalyze(key, model,
+    `Twitch чат #${channel}:\n${sample2}\n\nКак бот должен общаться в этом чате: какие фразы использовать, какие темы поднимать, как реагировать. Конкретные примеры идеальных ответов.`, 500);
+
+  setTrainProgress(85, 'Сохраняю...');
+  const date = new Date().toLocaleDateString('ru');
+  aiBot.longMemory = aiBot.longMemory.filter(m => !m.includes(`#${channel}`));
+  if (styleAnalysis) aiBot.longMemory.push(`[НАБЛЮДЕНИЕ ${date} #${channel} ${count} сообщ] СТИЛЬ: ${styleAnalysis}`);
+  if (rulesAnalysis) aiBot.longMemory.push(`[НАБЛЮДЕНИЕ ${date} #${channel}] ПРАВИЛА: ${rulesAnalysis}`);
+
+  // Реальные фразы из чата в streamerPatterns
+  const phrases = _trainMsgs.map(m => m.text).filter(t => t.length > 3 && t.length < 40)
+    .sort(() => Math.random() - 0.5).slice(0, 15);
+  aiBot.streamerPatterns = [...(aiBot.streamerPatterns || []), ...phrases].slice(-30);
+  try { localStorage.setItem('aiBotStreamerPatterns', JSON.stringify(aiBot.streamerPatterns)); } catch(e) {}
+
+  saveLongMemory();
+  const saved = [styleAnalysis, rulesAnalysis].filter(Boolean).length;
+  setTrainProgress(100, '');
+  setTrainStatus(`Готово. #${channel}: ${count} сообщений → ${saved} блока памяти.`);
+  aiBotLog(`Наблюдение #${channel}: ${saved} блока`, 'ok');
+  toast(`Изучил чат #${channel}!`, 'success', 5000);
+  document.getElementById('trainWatchBtn').style.display = '';
+  document.getElementById('trainWatchStopBtn').style.display = 'none';
 }
 
 function setTrainStatus(text) {
@@ -3035,19 +3113,6 @@ function showTrainProgress(show) {
   if (el) el.style.display = show ? '' : 'none';
 }
 
-function stopAudioCapture() {
-  _audioLoopActive = false;
-  if (_audioRecorder?.state === 'recording') { try { _audioRecorder.stop(); } catch(e) {} }
-  if (_audioStream) { _audioStream.getTracks().forEach(t => t.stop()); _audioStream = null; }
-  if (_audioContext) { _audioContext.close(); _audioContext = null; }
-  aiBot.lastStreamerSpeech = null;
-  document.getElementById('audioStartBtn').style.display = '';
-  document.getElementById('audioStopBtn').style.display = 'none';
-  document.getElementById('audioStatus').textContent = 'Не активен';
-  document.getElementById('audioStatus').style.color = 'var(--text3)';
-  document.getElementById('audioTranscript').style.display = 'none';
-  aiBotLog('Аудио захват остановлен', 'info');
-}
 loadClientId();
 loadAiBotSettings();
 loadLongMemory();
