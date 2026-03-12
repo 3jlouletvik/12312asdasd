@@ -520,7 +520,8 @@
             <div class="form-field">
               <label>Модель Gemini</label>
               <select class="queue-select" id="aiBotModel" style="width:100%">
-                <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (быстрый, бесплатный)</option>
+                <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (быстрый, бесплатный)</option>
+                <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (старый, быстрый)</option>
                 <option value="gemini-2.0-flash">gemini-2.0-flash (умнее, поиск)</option>
                 <option value="gemini-2.5-flash-preview-05-20">gemini-2.5-flash-preview (мощный)</option>
                 <option value="gemini-2.5-pro-preview-06-05">gemini-2.5-pro-preview (максимум)</option>
@@ -1952,6 +1953,7 @@ const aiBot = {
   lastStreamerSpeech: null,
   streamerPatterns: [],    // любимые слова/фразы стримера
   streamerSpeechLog: [],   // накопленная речь для анализа
+  recentReplies: [],       // последние 5 ответов для анти-повторения
 };
 
 // Эмоциональные состояния и их влияние
@@ -1962,6 +1964,7 @@ const EMOTIONS = {
   bored:    { label: 'немного скучно', temp: 0.9  },
   salty:    { label: 'бомбит',         temp: 1.1  },
   hype:     { label: 'полный хайп',    temp: 1.25 },
+  curious:  { label: 'интересно',      temp: 1.05 },
 };
 
 function aiBotLog(text, type='info') {
@@ -1990,8 +1993,8 @@ function loadLongMemory() {
 
 function saveLongMemory() {
   try {
-    // Держим максимум 40 фактов
-    if (aiBot.longMemory.length > 40) aiBot.longMemory = aiBot.longMemory.slice(-40);
+    // Держим максимум 60 фактов
+    if (aiBot.longMemory.length > 60) aiBot.longMemory = aiBot.longMemory.slice(-60);
     localStorage.setItem('aiBotLongMemory', JSON.stringify(aiBot.longMemory));
   } catch(e) {}
 }
@@ -2008,7 +2011,7 @@ async function extractMemory() {
   if (aiBot.chatHistory.length < 3) return;
   const key = localStorage.getItem('aiBotGeminiKey');
   if (!key) return;
-  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite';
 
   // Собираем только текстовые части истории (без скриншотов)
   const historyText = aiBot.chatHistory.map(h => {
@@ -2043,8 +2046,8 @@ async function extractMemory() {
         .filter(f => f.length > 8 && f.length < 200);
       const dated = facts.map(f => `[${date}] ${f}`);
       aiBot.longMemory.push(...dated);
-      // Держим не больше 40 записей, убираем старые
-      if (aiBot.longMemory.length > 40) aiBot.longMemory = aiBot.longMemory.slice(-40);
+      // Держим не больше 60 записей, убираем старые
+      if (aiBot.longMemory.length > 60) aiBot.longMemory = aiBot.longMemory.slice(-60);
       saveLongMemory();
       aiBotLog(`Память: сохранено ${dated.length} наблюдений`, 'ok');
     }
@@ -2239,7 +2242,7 @@ async function processAudioChunk(mimeType) {
   const blob = new Blob(_audioChunks, { type: mimeType });
   if (blob.size < 3000) return; // тишина
   const b64 = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result.split(',')[1]); r.readAsDataURL(blob); });
-  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite';
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2324,11 +2327,12 @@ function renderAiBotAccountSelect() {
 function updateEmotion(chatText) {
   const t = chatText.toLowerCase();
   // Накапливаем интенсивность по событиям
-  if (/lol|lmao|😂|хаха|кек|💀|орнул/.test(t)) { aiBot.emotionIntensity += 2; if (aiBot.emotionIntensity > 6) aiBot.emotion = 'amused'; }
-  if (/gg|победа|выиграл|ez|хайп|🔥|🚀/.test(t)) { aiBot.emotionIntensity += 3; aiBot.emotion = 'hype'; }
-  if (/умер|слился|провал|опять|снова|блин|ещё раз/.test(t)) { aiBot.emotionIntensity += 1; if (aiBot.emotionIntensity > 5) aiBot.emotion = 'salty'; }
-  // Постепенное угасание
-  aiBot.emotionIntensity = Math.max(0, aiBot.emotionIntensity - 0.3);
+  if (/lol|lmao|😂|😄|хаха|кек|кекw|💀|орнул|пфф|looool/.test(t)) { aiBot.emotionIntensity += 2; if (aiBot.emotionIntensity > 6) aiBot.emotion = 'amused'; }
+  if (/gg|победа|выиграл|ez|хайп|🔥|🚀|pog|poggers|pogchamp|вау|ого|шикарно/.test(t)) { aiBot.emotionIntensity += 3; aiBot.emotion = 'hype'; }
+  if (/умер|слился|провал|опять|снова|блин|ещё раз|жиза|ну и|серьёзно/.test(t)) { aiBot.emotionIntensity += 1; if (aiBot.emotionIntensity > 5) aiBot.emotion = 'salty'; }
+  if (/\?|почему|зачем|что если|как так|кто тут|как вообще/.test(t)) { if (aiBot.emotion === 'neutral' || aiBot.emotion === 'bored') aiBot.emotion = 'curious'; }
+  // Постепенное угасание — 0.5 чтобы быстрее возвращаться к neutral
+  aiBot.emotionIntensity = Math.max(0, aiBot.emotionIntensity - 0.5);
   if (aiBot.emotionIntensity < 2) aiBot.emotion = 'neutral';
   updateEmotionUI();
 }
@@ -2386,8 +2390,11 @@ async function checkAiBot(msg) {
   let triggerType = null;
   if (mentionsBot) {
     triggerType = 'mention';
-  } else if (isRealViewer && Math.random() < 0.15 && Date.now() - aiBot.lastSpoke > 20000) {
-    triggerType = 'viewer_react';
+  } else if (isRealViewer && msg.text.length >= 8 && Date.now() - aiBot.lastSpoke > 30000) {
+    // Адаптивный шанс: чем активнее чат, тем реже реагируем
+    const recentActivity = state.messages.filter(m => Date.now() - (m.ts || 0) < 60000).length;
+    const reactRate = recentActivity > 30 ? 0.05 : recentActivity > 10 ? 0.10 : 0.15;
+    if (Math.random() < reactRate) triggerType = 'viewer_react';
   }
 
   if (!triggerType) return;
@@ -2463,8 +2470,12 @@ async function callGemini(triggerMsg, botAcc, triggerType = 'mention') {
       ? '\nСкриншот стрима виден — ориентируйся на него.'
       : '\nТы не видишь экран стримера — не комментируй игровые моменты, только общение с чатом.';
 
+  const noRepeatNote = aiBot.recentReplies.length
+    ? `\nТЫ НЕДАВНО ГОВОРИЛА: ${aiBot.recentReplies.slice(-3).join(' | ')}\nНЕ повторяй похожее.`
+    : '';
+
   const systemPrompt = `${basePrompt}
-${longMemStr}${streamerStyle}${gameNote}
+${longMemStr}${streamerStyle}${gameNote}${noRepeatNote}
 Настроение: ${emotionInfo.label}.
 
 ПРАВИЛА:
@@ -2503,7 +2514,7 @@ ${longMemStr}${streamerStyle}${gameNote}
 
   const primaryModel = document.getElementById('aiBotModel')?.value
     || localStorage.getItem('aiBotModel')
-    || 'gemini-2.0-flash-lite';
+    || 'gemini-3.1-flash-lite';
 
   // Rate limiting
   if (!window._geminiLastCall) window._geminiLastCall = 0;
@@ -2524,12 +2535,12 @@ ${longMemStr}${streamerStyle}${gameNote}
     ...(useWebSearch ? { tools: [{ googleSearch: {} }] } : {}),
   };
 
-  // Fallback: основная → lite → flash
+  // Fallback: основная → 3.1-lite → 2.0-lite → flash
   const modelFallback2 = [
     primaryModel,
+    'gemini-3.1-flash-lite',
     'gemini-2.0-flash-lite',
     'gemini-2.0-flash',
-    'gemini-2.5-flash-preview-05-20',
   ].filter((m, i, arr) => arr.indexOf(m) === i);
 
   let data, usedModel;
@@ -2603,10 +2614,20 @@ ${longMemStr}${streamerStyle}${gameNote}
       return;
     }
 
+    // Фильтр AI-фраз — если проскочило что-то ботоподобное, промолчим
+    if (/конечно[,!]|разумеется|безусловно|несомненно|я понимаю|я слышу тебя|как ии|как бот|я здесь чтобы/i.test(reply)) {
+      aiBotLog('Фильтр: AI-фраза в ответе, пропускаем', 'info');
+      aiBot.chatHistory.pop();
+      return;
+    }
+
     aiBot.chatHistory.push({ role: 'model', parts: [{ text: reply }] });
     aiBot.lastSpoke = Date.now();
     // Сбрасываем речь стримера после использования
     if (triggerType !== 'audio') aiBot.lastStreamerSpeech = null;
+    // Анти-повторение — запоминаем последние ответы
+    aiBot.recentReplies.push(reply);
+    if (aiBot.recentReplies.length > 5) aiBot.recentReplies.shift();
 
     aiBotLog(`💬 "${reply}"`, 'ai');
 
@@ -2743,6 +2764,12 @@ function handleTranscript(transcript) {
 
   if (!exactMatch && !fuzzyMatch) return;
 
+  // Cooldown 45 сек между аудио-триггерами — не спамим
+  if (Date.now() - aiBot.lastSpoke < 45000) {
+    aiBotLog('🔔 Стример позвал голосом — cooldown, пропускаем', 'info');
+    return;
+  }
+
   aiBotLog(`🔔 Стример позвал "${nick}" голосом!`, 'ok');
 
   const accId = localStorage.getItem('aiBotAccId');
@@ -2798,7 +2825,7 @@ async function analyzeStreamerStyle() {
   if (!key || aiBot.streamerSpeechLog.length < 20) return;
 
   const sample = aiBot.streamerSpeechLog.slice(-40).join('\n');
-  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite';
 
   try {
     const res = await fetch(
@@ -2885,7 +2912,7 @@ async function runMemoryTest() {
   btn.textContent = '...';
   btn.disabled = true;
 
-  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite';
 
   // Собираем всю память
   const allMem = aiBot.longMemory.join('\n');
@@ -2981,7 +3008,7 @@ async function trainOnChatLog(input) {
     return;
   }
 
-  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite';
   aiBotLog(`Обучение: ${messages.length} сообщений из "${file.name}"`, 'info');
 
   // Собираем статистику по юзерам
@@ -3050,7 +3077,7 @@ async function trainOnChatLog(input) {
 
 // Хелпер — один запрос к Gemini с retry и fallback моделью
 async function geminiAnalyze(key, promptModel, prompt, maxTokens = 400) {
-  const fallbacks = [promptModel, 'gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-2.5-flash-preview-05-20']
+  const fallbacks = [promptModel, 'gemini-3.1-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite']
     .filter((m, i, a) => a.indexOf(m) === i);
 
   for (const model of fallbacks) {
@@ -3141,7 +3168,7 @@ async function analyzeWatchedChat(channel) {
   const key = localStorage.getItem('aiBotGeminiKey');
   if (!key) return;
 
-  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite';
   const count = _trainMsgs.length;
   aiBotLog(`Анализирую ${count} сообщений из #${channel}...`, 'info');
 
