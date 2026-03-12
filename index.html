@@ -191,6 +191,13 @@
   .log-line.err { color: var(--red); }
   .log-line.info { color: var(--purple); }
   * { scrollbar-width: thin; scrollbar-color: var(--bg4) transparent; }
+  .ai-section { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px; overflow: hidden; }
+  .ai-section-header { padding: 10px 14px; cursor: pointer; font-weight: 600; font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 8px; user-select: none; transition: background 0.15s; }
+  .ai-section-header:hover { background: var(--bg4); }
+  .ai-section-header::after { content: '▾'; margin-left: auto; font-size: 11px; color: var(--text3); transition: transform 0.2s; }
+  .ai-section.collapsed .ai-section-header::after { transform: rotate(-90deg); }
+  .ai-section-body { padding: 12px 14px; padding-top: 0; }
+  .ai-section.collapsed .ai-section-body { display: none; }
   @media (max-width: 700px) { .layout { grid-template-columns: 1fr; } .sidebar { display: none; } .broadcast-grid { grid-template-columns: 1fr; } }
 </style>
 </head>
@@ -512,18 +519,21 @@
         </div>
 
         <!-- НАСТРОЙКИ -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div class="ai-section">
+          <div class="ai-section-header" onclick="this.parentElement.classList.toggle('collapsed')">⚙️ Настройки и личность</div>
+          <div class="ai-section-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
 
-          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px">
-            <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:10px">⚙️ Настройки бота</div>
+          <div style="padding:4px 0">
+            <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:10px">Настройки бота</div>
 
             <div class="form-field">
               <label>Модель Gemini</label>
               <select class="queue-select" id="aiBotModel" style="width:100%">
-                <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (быстрый, бесплатный)</option>
-                <option value="gemini-2.0-flash">gemini-2.0-flash (умнее, поиск)</option>
-                <option value="gemini-2.5-flash-preview-05-20">gemini-2.5-flash-preview (мощный)</option>
-                <option value="gemini-2.5-pro-preview-06-05">gemini-2.5-pro-preview (максимум)</option>
+                <option value="gemini-3.1-flash-lite-preview">gemini-3.1-flash-lite (быстрый, бесплатный)</option>
+                <option value="gemini-2.5-flash">gemini-2.5-flash (умнее, поиск)</option>
+                <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (старый)</option>
+                <option value="gemini-2.0-flash">gemini-2.0-flash (старый)</option>
               </select>
             </div>
 
@@ -532,7 +542,7 @@
                 <input type="checkbox" id="aiBotWebSearch" style="accent-color:var(--purple);width:14px;height:14px">
                 <span>🌐 Поиск в интернете</span>
               </label>
-              <div class="form-hint">Бот сможет гуглить актуальную инфу (патчи, новости, игры). Работает с gemini-2.0-flash, gemini-2.0-flash-lite и gemini-2.5</div>
+              <div class="form-hint">Бот сможет гуглить актуальную инфу (патчи, новости, игры). Работает с gemini-3.1-flash-lite, gemini-2.5-flash и gemini-2.0-flash</div>
             </div>
 
             <div class="form-field">
@@ -567,7 +577,7 @@
             <button class="btn btn-red btn-sm" style="width:100%;margin-top:6px" onclick="clearLongMemory()">🗑 Очистить долгосрочную память</button>
           </div>
 
-          <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px">
+          <div style="padding:4px 0">
             <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:10px">🎭 Личность бота</div>
             <div class="form-field">
               <label>Системный промпт (характер)</label>
@@ -580,10 +590,13 @@
             </div>
           </div>
         </div>
+          </div>
+        </div>
 
         <!-- ЗАХВАТ СТРИМА — единый блок -->
-        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px">
-          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:10px">📡 Захват стрима</div>
+        <div class="ai-section">
+          <div class="ai-section-header" onclick="this.parentElement.classList.toggle('collapsed')">📡 Захват стрима</div>
+          <div class="ai-section-body">
 
           <div style="font-size:11px;color:var(--text3);margin-bottom:10px;line-height:1.7;background:var(--bg4);padding:8px;border-radius:6px">
             Открой стрим в соседней вкладке Chrome. Нажми кнопку, выбери вкладку со стримом.<br>
@@ -623,17 +636,22 @@
 
           <canvas id="screenshotCanvas" style="display:none"></canvas>
           <video id="screenVideo" style="display:none" autoplay muted playsinline></video>
+          </div>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px">
+
+        <!-- УПРАВЛЕНИЕ (всегда видно) -->
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;padding:10px 14px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius)">
           <button class="btn btn-green" id="aiBotStartBtn" onclick="startAiBot()">▶ Включить AI бота</button>
           <button class="btn btn-red" id="aiBotStopBtn" onclick="stopAiBot()" style="display:none">⏹ Выключить + сохранить память</button>
           <div id="aiBotStatus" style="font-size:12px;color:var(--text3)">Выключен</div>
           <div id="aiBotEmotionState" style="font-size:13px;margin-left:4px"></div>
+          <div id="aiBotModelInfo" style="font-size:10px;color:var(--text3);margin-left:auto"></div>
         </div>
 
         <!-- ПРОВЕРКА ПАМЯТИ -->
-        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px">
-          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:8px">🔍 Проверка памяти и обучения</div>
+        <div class="ai-section collapsed">
+          <div class="ai-section-header" onclick="this.parentElement.classList.toggle('collapsed')">🔍 Проверка памяти и обучения</div>
+          <div class="ai-section-body">
 
           <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
             <!-- Просмотр памяти -->
@@ -665,11 +683,13 @@
               <div id="memTestUsed" style="font-size:11px;color:var(--text2);font-family:'JetBrains Mono',monospace;line-height:1.8"></div>
             </div>
           </div>
+          </div>
         </div>
 
         <!-- ОБУЧЕНИЕ НА ЧУЖОМ ЧАТЕ -->
-        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px">
-          <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3);margin-bottom:8px">🎓 Обучение на чужом чате</div>
+        <div class="ai-section collapsed">
+          <div class="ai-section-header" onclick="this.parentElement.classList.toggle('collapsed')">🎓 Обучение на чужом чате</div>
+          <div class="ai-section-body">
           <div style="font-size:11px;color:var(--text3);line-height:1.7;margin-bottom:10px">
             Бот изучит стиль общения другого чата и запомнит как там разговаривают. Можно загрузить лог файл или подключиться и наблюдать вживую.
           </div>
@@ -705,15 +725,18 @@
             </div>
             <div id="trainProgressText" style="font-size:10px;color:var(--text3);margin-top:4px"></div>
           </div>
+          </div>
         </div>
 
         <!-- ЛОГ БОТА -->
-        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:10px;overflow:hidden">
-          <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border)">
-            <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text3)">Лог AI бота</span>
-            <button class="btn btn-outline btn-xs" onclick="document.getElementById('aiBotLog').innerHTML=''">Очистить</button>
+        <div class="ai-section">
+          <div class="ai-section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+            📋 Лог AI бота
+            <button class="btn btn-outline btn-xs" onclick="event.stopPropagation();document.getElementById('aiBotLog').innerHTML=''" style="margin-left:auto;margin-right:8px">Очистить</button>
           </div>
-          <div id="aiBotLog" style="padding:10px 14px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text3);line-height:1.8;max-height:200px;overflow-y:auto"></div>
+          <div class="ai-section-body" style="padding:0 14px 10px">
+            <div id="aiBotLog" style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text3);line-height:1.8;max-height:250px;overflow-y:auto"></div>
+          </div>
         </div>
       </div>
     </div>
@@ -1974,6 +1997,8 @@ function aiBotLog(text, type='info') {
   line.style.color = colors[type] || colors.info;
   line.textContent = `[${nowTime()}] ${text}`;
   el.appendChild(line);
+  // Auto-trim: не больше 200 строк
+  while (el.children.length > 200) el.removeChild(el.firstChild);
   el.scrollTop = el.scrollHeight;
 }
 
@@ -2010,7 +2035,7 @@ async function extractMemory() {
   if (aiBot.chatHistory.length < 3) return;
   const key = localStorage.getItem('aiBotGeminiKey');
   if (!key) return;
-  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
 
   // Собираем только текстовые части истории (без скриншотов)
   const historyText = aiBot.chatHistory.map(h => {
@@ -2241,7 +2266,7 @@ async function processAudioChunk(mimeType) {
   const blob = new Blob(_audioChunks, { type: mimeType });
   if (blob.size < 3000) return; // тишина
   const b64 = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result.split(',')[1]); r.readAsDataURL(blob); });
-  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2283,11 +2308,17 @@ function startAiBot() {
   aiBot.emotion = 'neutral';
   aiBot.emotionIntensity = 0;
   aiBot.lastSpoke = 0;
+  aiBot.recentReplies = [];
   document.getElementById('aiBotStartBtn').style.display = 'none';
   document.getElementById('aiBotStopBtn').style.display = '';
   document.getElementById('aiBotStatus').textContent = `✅ @${acc.username} · триггер: "${nick}"`;
   document.getElementById('aiBotStatus').style.color = 'var(--green)';
+  const modelName = document.getElementById('aiBotModel')?.value || localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
+  const modelInfoEl = document.getElementById('aiBotModelInfo');
+  if (modelInfoEl) modelInfoEl.textContent = `Модель: ${modelName}`;
   updateEmotionUI();
+  // Очищаем лог при рестарте
+  document.getElementById('aiBotLog').innerHTML = '';
   aiBotLog(`AI бот запущен. Аккаунт: @${acc.username}. Триггер: "${nick}"`, 'ok');
   if (aiBot.longMemory.length) aiBotLog(`Загружено ${aiBot.longMemory.length} воспоминаний`, 'ok');
 
@@ -2344,7 +2375,7 @@ function startInitiativeTimer(botAcc) {
 
   const schedule = () => {
     if (!aiBot.active) return;
-    const ms = (intervalMin * 60 + Math.random() * intervalMin * 30) * 1000;
+    const ms = Math.max(120000, (intervalMin * 60 + Math.random() * intervalMin * 30) * 1000);
     aiBot.initiativeTimer = setTimeout(async () => {
       if (!aiBot.active || !botAcc.connected) return;
       // Не пишем если недавно уже отвечали
@@ -2513,7 +2544,7 @@ ${longMemStr}${streamerStyle}${gameNote}${noRepeatNote}
 
   const primaryModel = document.getElementById('aiBotModel')?.value
     || localStorage.getItem('aiBotModel')
-    || 'gemini-2.0-flash-lite';
+    || 'gemini-3.1-flash-lite-preview';
 
   // Rate limiting
   if (!window._geminiLastCall) window._geminiLastCall = 0;
@@ -2533,15 +2564,15 @@ ${longMemStr}${streamerStyle}${gameNote}${noRepeatNote}
     generationConfig: { maxOutputTokens: 120, temperature: emotionInfo.temp },
   };
 
-  // googleSearch поддерживают только non-lite модели
-  const SEARCH_CAPABLE = ['gemini-2.0-flash', 'gemini-2.5-flash-preview-05-20', 'gemini-2.5-pro-preview-06-05'];
+  // Модели с поддержкой Google Search Grounding
+  const SEARCH_CAPABLE = ['gemini-3.1-flash-lite-preview', 'gemini-2.5-flash', 'gemini-2.0-flash'];
 
-  // Fallback: основная → 2.0-lite → 2.0-flash → 2.5-flash
+  // Fallback: основная → 3.1-lite → 2.5-flash → 2.0-flash-lite
   const modelFallback2 = [
     primaryModel,
+    'gemini-3.1-flash-lite-preview',
+    'gemini-2.5-flash',
     'gemini-2.0-flash-lite',
-    'gemini-2.0-flash',
-    'gemini-2.5-flash-preview-05-20',
   ].filter((m, i, arr) => arr.indexOf(m) === i);
 
   let data, usedModel;
@@ -2573,8 +2604,8 @@ ${longMemStr}${streamerStyle}${gameNote}${noRepeatNote}
       if (res.status === 429 || res.status === 503 ||
           data.error?.message?.toLowerCase().match(/overload|quota|high demand|resource/)) {
         window._geminiFailStreak++;
-        const wait = Math.min(2000 * window._geminiFailStreak, 8000);
-        aiBotLog(`${model} перегружена, жду ${wait/1000}с...`, 'info');
+        const wait = Math.min(2000 * window._geminiFailStreak + Math.random() * 1000, 10000);
+        aiBotLog(`${model} перегружена, жду ${(wait/1000).toFixed(1)}с...`, 'info');
         await sleep(wait);
         continue;
       }
@@ -2831,24 +2862,13 @@ async function analyzeStreamerStyle() {
   if (!key || aiBot.streamerSpeechLog.length < 20) return;
 
   const sample = aiBot.streamerSpeechLog.slice(-40).join('\n');
-  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
 
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text:
-            `Вот фразы которые произнёс стример во время стрима:\n${sample}\n\nОпиши в 2-3 коротких пунктах: его манеру речи, характерные словечки, эмоциональный стиль. Только факты, коротко.`
-          }]}],
-          generationConfig: { maxOutputTokens: 120, temperature: 0.3 }
-        })
-      }
+    const analysis = await geminiAnalyze(key, model,
+      `Вот фразы которые произнёс стример во время стрима:\n${sample}\n\nОпиши в 2-3 коротких пунктах: его манеру речи, характерные словечки, эмоциональный стиль. Только факты, коротко.`,
+      120
     );
-    const data = await res.json();
-    const analysis = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
     if (analysis) {
       aiBot.longMemory.push(`[стиль стримера]: ${analysis}`);
       saveLongMemory();
@@ -2899,7 +2919,7 @@ function showMemoryInspector() {
   }
 
   content.innerHTML = html;
-  stats.textContent = `Всего записей: ${aiBot.longMemory.length}/40`;
+  stats.textContent = `Всего записей: ${aiBot.longMemory.length}/60`;
   inspector.style.display = '';
 }
 
@@ -2918,7 +2938,7 @@ async function runMemoryTest() {
   btn.textContent = '...';
   btn.disabled = true;
 
-  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
 
   // Собираем всю память
   const allMem = aiBot.longMemory.join('\n');
@@ -3014,7 +3034,7 @@ async function trainOnChatLog(input) {
     return;
   }
 
-  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
   aiBotLog(`Обучение: ${messages.length} сообщений из "${file.name}"`, 'info');
 
   // Собираем статистику по юзерам
@@ -3069,8 +3089,8 @@ async function trainOnChatLog(input) {
     try { localStorage.setItem('aiBotStreamerPatterns', JSON.stringify(aiBot.streamerPatterns)); } catch(e) {}
   }
 
-  // Лимит памяти — 40 записей (в sync с saveLongMemory)
-  if (aiBot.longMemory.length > 40) aiBot.longMemory = aiBot.longMemory.slice(-40);
+  // Лимит памяти — 60 записей (в sync с saveLongMemory)
+  if (aiBot.longMemory.length > 60) aiBot.longMemory = aiBot.longMemory.slice(-60);
   saveLongMemory();
 
   const saved = [styleAnalysis, behaviorAnalysis, rulesAnalysis].filter(Boolean).length;
@@ -3083,7 +3103,7 @@ async function trainOnChatLog(input) {
 
 // Хелпер — один запрос к Gemini с retry и fallback моделью
 async function geminiAnalyze(key, promptModel, prompt, maxTokens = 400) {
-  const fallbacks = [promptModel, 'gemini-2.0-flash-lite', 'gemini-2.0-flash', 'gemini-2.5-flash-preview-05-20']
+  const fallbacks = [promptModel, 'gemini-3.1-flash-lite-preview', 'gemini-2.5-flash', 'gemini-2.0-flash-lite']
     .filter((m, i, a) => a.indexOf(m) === i);
 
   for (const model of fallbacks) {
@@ -3174,7 +3194,7 @@ async function analyzeWatchedChat(channel) {
   const key = localStorage.getItem('aiBotGeminiKey');
   if (!key) return;
 
-  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite-preview';
   const count = _trainMsgs.length;
   aiBotLog(`Анализирую ${count} сообщений из #${channel}...`, 'info');
 
