@@ -520,8 +520,7 @@
             <div class="form-field">
               <label>Модель Gemini</label>
               <select class="queue-select" id="aiBotModel" style="width:100%">
-                <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (быстрый, бесплатный)</option>
-                <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (старый, быстрый)</option>
+                <option value="gemini-2.0-flash-lite">gemini-2.0-flash-lite (быстрый, бесплатный)</option>
                 <option value="gemini-2.0-flash">gemini-2.0-flash (умнее, поиск)</option>
                 <option value="gemini-2.5-flash-preview-05-20">gemini-2.5-flash-preview (мощный)</option>
                 <option value="gemini-2.5-pro-preview-06-05">gemini-2.5-pro-preview (максимум)</option>
@@ -2011,7 +2010,7 @@ async function extractMemory() {
   if (aiBot.chatHistory.length < 3) return;
   const key = localStorage.getItem('aiBotGeminiKey');
   if (!key) return;
-  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
 
   // Собираем только текстовые части истории (без скриншотов)
   const historyText = aiBot.chatHistory.map(h => {
@@ -2242,7 +2241,7 @@ async function processAudioChunk(mimeType) {
   const blob = new Blob(_audioChunks, { type: mimeType });
   if (blob.size < 3000) return; // тишина
   const b64 = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result.split(',')[1]); r.readAsDataURL(blob); });
-  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
   try {
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -2514,7 +2513,7 @@ ${longMemStr}${streamerStyle}${gameNote}${noRepeatNote}
 
   const primaryModel = document.getElementById('aiBotModel')?.value
     || localStorage.getItem('aiBotModel')
-    || 'gemini-3.1-flash-lite';
+    || 'gemini-2.0-flash-lite';
 
   // Rate limiting
   if (!window._geminiLastCall) window._geminiLastCall = 0;
@@ -2532,15 +2531,17 @@ ${longMemStr}${streamerStyle}${gameNote}${noRepeatNote}
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents: aiBot.chatHistory,
     generationConfig: { maxOutputTokens: 120, temperature: emotionInfo.temp },
-    ...(useWebSearch ? { tools: [{ googleSearch: {} }] } : {}),
   };
 
-  // Fallback: основная → 3.1-lite → 2.0-lite → flash
+  // googleSearch поддерживают только non-lite модели
+  const SEARCH_CAPABLE = ['gemini-2.0-flash', 'gemini-2.5-flash-preview-05-20', 'gemini-2.5-pro-preview-06-05'];
+
+  // Fallback: основная → 2.0-lite → 2.0-flash → 2.5-flash
   const modelFallback2 = [
     primaryModel,
-    'gemini-3.1-flash-lite',
     'gemini-2.0-flash-lite',
     'gemini-2.0-flash',
+    'gemini-2.5-flash-preview-05-20',
   ].filter((m, i, arr) => arr.indexOf(m) === i);
 
   let data, usedModel;
@@ -2548,9 +2549,14 @@ ${longMemStr}${streamerStyle}${gameNote}${noRepeatNote}
   for (let mi = 0; mi < modelFallback2.length; mi++) {
     const model = modelFallback2[mi];
     const timeoutMs = 20000;
+    // Поиск только для моделей, которые его поддерживают
+    const modelSupportsSearch = SEARCH_CAPABLE.some(m => model.startsWith(m) || model === m);
+    const payload = useWebSearch && modelSupportsSearch
+      ? { ...basePayload, tools: [{ googleSearch: {} }] }
+      : basePayload;
 
     try {
-      aiBotLog(`Запрос: ${model}...`, 'info');
+      aiBotLog(`Запрос: ${model}${useWebSearch && modelSupportsSearch ? ' 🌐' : ''}...`, 'info');
       const controller = new AbortController();
       const tid = setTimeout(() => controller.abort(), timeoutMs);
       let res;
@@ -2558,7 +2564,7 @@ ${longMemStr}${streamerStyle}${gameNote}${noRepeatNote}
         res = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
           { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(basePayload), signal: controller.signal }
+            body: JSON.stringify(payload), signal: controller.signal }
         );
       } finally { clearTimeout(tid); }
 
@@ -2825,7 +2831,7 @@ async function analyzeStreamerStyle() {
   if (!key || aiBot.streamerSpeechLog.length < 20) return;
 
   const sample = aiBot.streamerSpeechLog.slice(-40).join('\n');
-  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
 
   try {
     const res = await fetch(
@@ -2912,7 +2918,7 @@ async function runMemoryTest() {
   btn.textContent = '...';
   btn.disabled = true;
 
-  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
 
   // Собираем всю память
   const allMem = aiBot.longMemory.join('\n');
@@ -3008,7 +3014,7 @@ async function trainOnChatLog(input) {
     return;
   }
 
-  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
   aiBotLog(`Обучение: ${messages.length} сообщений из "${file.name}"`, 'info');
 
   // Собираем статистику по юзерам
@@ -3077,7 +3083,7 @@ async function trainOnChatLog(input) {
 
 // Хелпер — один запрос к Gemini с retry и fallback моделью
 async function geminiAnalyze(key, promptModel, prompt, maxTokens = 400) {
-  const fallbacks = [promptModel, 'gemini-3.1-flash-lite', 'gemini-2.0-flash', 'gemini-2.0-flash-lite']
+  const fallbacks = [promptModel, 'gemini-2.0-flash-lite', 'gemini-2.0-flash', 'gemini-2.5-flash-preview-05-20']
     .filter((m, i, a) => a.indexOf(m) === i);
 
   for (const model of fallbacks) {
@@ -3168,7 +3174,7 @@ async function analyzeWatchedChat(channel) {
   const key = localStorage.getItem('aiBotGeminiKey');
   if (!key) return;
 
-  const model = localStorage.getItem('aiBotModel') || 'gemini-3.1-flash-lite';
+  const model = localStorage.getItem('aiBotModel') || 'gemini-2.0-flash-lite';
   const count = _trainMsgs.length;
   aiBotLog(`Анализирую ${count} сообщений из #${channel}...`, 'info');
 
